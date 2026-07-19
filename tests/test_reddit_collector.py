@@ -17,6 +17,11 @@ from backend.app.collector import (
     RedditNetworkError,
     RedditSettings,
 )
+from backend.app.observability import (
+    ObservabilitySettings,
+    Telemetry,
+    TelemetryRecorder,
+)
 
 SCHEMA_PATH = Path(__file__).parents[1] / "schemas" / "raw_reddit.json"
 RAW_REDDIT_SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -161,6 +166,7 @@ def make_collector(
     *,
     settings: RedditSettings | None = None,
     delays: list[float] | None = None,
+    telemetry: TelemetryRecorder | None = None,
 ) -> RedditCollector:
     recorded_delays = delays if delays is not None else []
     return RedditCollector(
@@ -168,6 +174,7 @@ def make_collector(
         reddit=cast(Any, reddit),
         sleeper=recorded_delays.append,
         clock=lambda: FIXED_TIME,
+        telemetry=telemetry,
     )
 
 
@@ -249,13 +256,18 @@ def test_fetch_post_retries_rate_limit_using_retry_after() -> None:
         submission_effects=[rate_limit, submission],
     )
     delays: list[float] = []
-    collector = make_collector(reddit, delays=delays)
+    telemetry = Telemetry(ObservabilitySettings(service_name="collector-tests"))
+    collector = make_collector(reddit, delays=delays, telemetry=telemetry)
 
     capture = collector.fetch_post(submission.url)
 
     assert_valid_capture(capture)
     assert delays == [2.0]
     assert reddit.submission_urls == [submission.url, submission.url]
+    assert (
+        'signalmine_retries_total{component="reddit",reason="rate_limit"} 1.0'
+        in telemetry.render_prometheus().decode()
+    )
 
 
 def test_fetch_post_wraps_exhausted_network_failures() -> None:

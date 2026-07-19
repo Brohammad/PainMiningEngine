@@ -3,7 +3,7 @@
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
@@ -11,6 +11,7 @@ from jsonschema.protocols import Validator
 from pydantic import ValidationError as PydanticValidationError
 
 from backend.app.normalizer import NormalizedPost
+from backend.app.observability import NoOpTelemetry, TelemetryRecorder
 from backend.app.schemas.complaint import (
     Complaint,
     EvidenceField,
@@ -25,7 +26,11 @@ class ComplaintValidationError(ValueError):
 class ComplaintValidator:
     """Validate complaint shape and provenance without modifying the input."""
 
-    def __init__(self, schema_directory: Path | None = None) -> None:
+    def __init__(
+        self,
+        schema_directory: Path | None = None,
+        telemetry: TelemetryRecorder | None = None,
+    ) -> None:
         schema_path = schema_directory or self._default_schema_directory()
         format_checker = FormatChecker()
         self._normalized_validator: Validator = Draft202012Validator(
@@ -36,6 +41,7 @@ class ComplaintValidator:
             self._load_schema(schema_path / "extraction.json"),
             format_checker=format_checker,
         )
+        self._telemetry = telemetry or NoOpTelemetry()
 
     def validate(
         self,
@@ -46,16 +52,28 @@ class ComplaintValidator:
 
         try:
             self._normalized_validator.validate(normalized)
+        except JsonSchemaValidationError as exc:
+            self._fail("normalized_schema", exc)
+
+        try:
             validated = Complaint.model_validate(complaint)
+        except (PydanticValidationError, ValueError) as exc:
+            self._fail("pydantic", exc)
+
+        try:
             self._complaint_validator.validate(validated.model_dump(mode="json"))
+        except JsonSchemaValidationError as exc:
+            self._fail("complaint_schema", exc)
+
+        try:
             self._validate_provenance(validated, normalized)
-        except (
-            PydanticValidationError,
-            JsonSchemaValidationError,
-            ValueError,
-        ) as exc:
-            raise ComplaintValidationError("complaint validation failed") from exc
+        except ValueError as exc:
+            self._fail("provenance", exc)
         return validated
+
+    def _fail(self, gate: str, error: Exception) -> NoReturn:
+        self._telemetry.record_validation_failure(gate)
+        raise ComplaintValidationError("complaint validation failed") from error
 
     @staticmethod
     def _validate_provenance(

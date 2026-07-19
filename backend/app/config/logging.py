@@ -13,16 +13,14 @@ def configure_logging(settings: Settings) -> None:
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
-            "standard": {
-                "format": (
-                    "%(asctime)s %(levelname)s %(name)s " "[%(process)d] %(message)s"
-                ),
+            "json": {
+                "()": "backend.app.observability.logging.JsonFormatter",
             },
         },
         "handlers": {
             "console": {
                 "class": "logging.StreamHandler",
-                "formatter": "standard",
+                "formatter": "json",
                 "level": settings.log_level,
                 "stream": "ext://sys.stderr",
             },
@@ -30,6 +28,23 @@ def configure_logging(settings: Settings) -> None:
         "root": {
             "handlers": ["console"],
             "level": settings.log_level,
+        },
+        "loggers": {
+            "uvicorn": {
+                "handlers": ["console"],
+                "level": settings.log_level,
+                "propagate": False,
+            },
+            "uvicorn.error": {
+                "handlers": ["console"],
+                "level": settings.log_level,
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["console"],
+                "level": "WARNING",
+                "propagate": False,
+            },
         },
     }
     dictConfig(config)

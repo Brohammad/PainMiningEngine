@@ -22,6 +22,11 @@ from backend.app.extractor import (
     TriStateField,
 )
 from backend.app.extractor.engine import InstructorClient
+from backend.app.observability import (
+    ObservabilitySettings,
+    Telemetry,
+    TelemetryRecorder,
+)
 
 ROOT = Path(__file__).parents[1]
 PROMPT_PATH = ROOT / "prompts" / "extract_v1.md"
@@ -145,11 +150,13 @@ def make_engine(
     client: FakeInstructorClient,
     *,
     settings: ExtractionSettings | None = None,
+    telemetry: TelemetryRecorder | None = None,
 ) -> ExtractionEngine:
     return ExtractionEngine(
         settings or make_settings(),
         client=cast(InstructorClient, client),
         clock=lambda: FIXED_TIME,
+        telemetry=telemetry,
     )
 
 
@@ -178,9 +185,11 @@ def test_extract_returns_pydantic_and_json_schema_valid_complaint() -> None:
 def test_extract_retries_only_invalid_responses() -> None:
     valid = make_candidate()
     client = FakeInstructorClient([{"unexpected": "shape"}, valid])
+    telemetry = Telemetry(ObservabilitySettings(service_name="extraction-tests"))
     engine = make_engine(
         client,
         settings=make_settings(validation_retries=1),
+        telemetry=telemetry,
     )
 
     complaint = engine.extract(make_normalized())
@@ -190,6 +199,18 @@ def test_extract_retries_only_invalid_responses() -> None:
     assert (
         client.completions.calls[0]["messages"]
         == client.completions.calls[1]["messages"]
+    )
+    metrics = telemetry.render_prometheus().decode()
+    assert (
+        'signalmine_retries_total{component="extraction",'
+        'reason="pydantic_response"} 1.0' in metrics
+    )
+    assert (
+        'signalmine_extraction_latency_seconds_count{outcome="success"} 1.0' in metrics
+    )
+    assert (
+        "signalmine_extraction_latency_seconds_count"
+        '{outcome="validation_failure"} 1.0' in metrics
     )
 
 

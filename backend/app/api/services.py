@@ -1,19 +1,28 @@
 """Application services used by HTTP routes."""
 
+from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
 from backend.app.api.schemas import (
     ComplaintResponse,
     HealthResponse,
-    MetricsResponse,
 )
+from backend.app.observability import Telemetry
 from backend.app.schemas import Complaint
 from backend.app.storage import StageCounts
 
 
 class ComplaintNotFoundError(LookupError):
     """Raised when a requested persisted complaint does not exist."""
+
+
+@dataclass(frozen=True, slots=True)
+class PrometheusMetrics:
+    """Rendered Prometheus response owned by the transport adapter."""
+
+    body: bytes
+    content_type: str
 
 
 class Pipeline(Protocol):
@@ -87,15 +96,16 @@ class HealthService:
 class MetricsService:
     """Expose persisted stage counts."""
 
-    def __init__(self, store: ComplaintStore) -> None:
+    def __init__(self, store: ComplaintStore, telemetry: Telemetry) -> None:
         self._store = store
+        self._telemetry = telemetry
 
-    def get(self) -> MetricsResponse:
-        """Return current raw, normalized, and complaint counts."""
+    def get(self) -> PrometheusMetrics:
+        """Refresh stage gauges and render Prometheus exposition."""
 
         counts = self._store.count_stages()
-        return MetricsResponse(
-            raw_posts=counts.raw_posts,
-            normalized_posts=counts.normalized_posts,
-            complaints=counts.complaints,
+        self._telemetry.update_stage_counts(counts)
+        return PrometheusMetrics(
+            body=self._telemetry.render_prometheus(),
+            content_type=self._telemetry.prometheus_content_type,
         )

@@ -22,10 +22,11 @@ The current implementation provides:
 - insert-only SQLAlchemy persistence for every pipeline stage
 - Typer commands for stage-by-stage JSON workflows
 - golden-dataset extraction metrics and Markdown reports
-- FastAPI endpoints for processing, complaint reads, health, and stage metrics
+- FastAPI endpoints for processing, complaint reads, health, and Prometheus
+  metrics
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
-- standard-library logging configuration
+- JSON logging, request correlation, OpenTelemetry tracing, and bounded metrics
 - Ruff, Black, and Mypy configuration
 
 It deliberately contains no authentication, embeddings, clustering,
@@ -47,6 +48,7 @@ opportunity scoring, workers, or frontend.
 | `backend.app.pipeline` | Direct synchronous orchestration from collection through final validation, returning a Complaint. |
 | `backend.app.evaluation` | Golden dataset loading, extraction comparison, metrics, and Markdown reporting. |
 | `backend.app.api` | Thin FastAPI routes, transport schemas, application services, and the explicit API composition root. |
+| `backend.app.observability` | Structured logging, request context, OpenTelemetry traces, and application-owned Prometheus instruments. |
 
 Dependencies should point inward through explicit constructor or function
 arguments. Entry points will own composition and pass an
@@ -284,12 +286,36 @@ starting the server.
 | `POST` | `/process` | Accepts `{"url": "https://..."}`; runs and persists the synchronous pipeline; returns the extraction ID and Complaint |
 | `GET` | `/complaints/{id}` | Returns a persisted extraction ID and Complaint, or `404` |
 | `GET` | `/health` | Checks database connectivity and returns `{"status": "ok"}` |
-| `GET` | `/metrics` | Returns row counts for raw, normalized, and complaint stages |
+| `GET` | `/metrics` | Returns Prometheus text exposition, including persisted stage gauges |
 
 Routes only translate HTTP inputs and outputs. Application services own
 orchestration, and storage owns database queries. Tests can inject an
 `ApiContainer` into `create_app`; importing the API creates no clients,
 settings, engines, or service singletons.
+
+## Production observability
+
+The production API emits one-line JSON logs to stderr. Every HTTP response has
+an `X-Request-ID`; a safe inbound value is propagated, otherwise the middleware
+generates one. Request IDs and active OpenTelemetry trace/span IDs are added to
+logs automatically. Logs and metric labels never include prompts, source text,
+API keys, full URLs, document IDs, or exception messages.
+
+OpenTelemetry traces cover FastAPI requests, SQLAlchemy calls, complete pipeline
+runs, and each pipeline stage. Set an OTLP/HTTP traces endpoint to export them:
+
+| Environment variable | Default |
+|----------------------|---------|
+| `OBSERVABILITY_SERVICE_NAME` | `signalmine` |
+| `OBSERVABILITY_SERVICE_VERSION` | `0.1.0` |
+| `OBSERVABILITY_OTLP_TRACES_ENDPOINT` | unset; e.g. `http://collector:4318/v1/traces` |
+| `OBSERVABILITY_TRACE_SAMPLE_RATIO` | `1.0` |
+| `OBSERVABILITY_REQUEST_ID_HEADER` | `X-Request-ID` |
+
+`GET /metrics` uses an application-owned Prometheus registry. It exposes bounded
+HTTP request counts and latency, pipeline run outcomes and stage timing,
+extraction latency, validation failures, retry counts and delay, and persisted
+stage gauges. No dashboard configuration is included.
 
 ## Command-line interface
 

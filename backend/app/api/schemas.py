@@ -31,11 +31,3 @@ class HealthResponse(ApiModel):
     """Database-backed service health."""
 
     status: Literal["ok"]
-
-
-class MetricsResponse(ApiModel):
-    """Current persisted stage counts."""
-
-    raw_posts: int
-    normalized_posts: int
-    complaints: int

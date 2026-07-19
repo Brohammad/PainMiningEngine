@@ -12,6 +12,7 @@ from backend.app.api.services import (
     MetricsService,
     ProcessingService,
 )
+from backend.app.observability import ObservabilitySettings, Telemetry
 from backend.app.schemas import (
     Complaint,
     ExtractionMeta,
@@ -79,21 +80,23 @@ class MemoryStore:
         self.health_checks += 1
 
 
-def make_client() -> tuple[TestClient, StaticPipeline, MemoryStore]:
+def make_client() -> tuple[TestClient, StaticPipeline, MemoryStore, Telemetry]:
     complaint = make_complaint()
     pipeline = StaticPipeline(complaint)
     store = MemoryStore()
+    telemetry = Telemetry(ObservabilitySettings(service_name="signalmine-tests"))
     container = ApiContainer(
         processing=ProcessingService(pipeline, store),
         complaints=ComplaintQueryService(store),
         health=HealthService(store),
-        metrics=MetricsService(store),
+        metrics=MetricsService(store, telemetry),
+        telemetry=telemetry,
     )
-    return TestClient(create_app(container)), pipeline, store
+    return TestClient(create_app(container)), pipeline, store, telemetry
 
 
 def test_process_uses_injected_pipeline_and_returns_persisted_id() -> None:
-    client, pipeline, _store = make_client()
+    client, pipeline, _store, _telemetry = make_client()
 
     response = client.post(
         "/process",
@@ -107,7 +110,7 @@ def test_process_uses_injected_pipeline_and_returns_persisted_id() -> None:
 
 
 def test_get_complaint_returns_saved_result_and_404_for_missing_id() -> None:
-    client, _pipeline, _store = make_client()
+    client, _pipeline, _store, _telemetry = make_client()
     client.post(
         "/process",
         json={"url": "https://www.reddit.com/r/devops/comments/test/"},
@@ -123,7 +126,7 @@ def test_get_complaint_returns_saved_result_and_404_for_missing_id() -> None:
 
 
 def test_health_and_metrics_delegate_to_injected_services() -> None:
-    client, _pipeline, store = make_client()
+    client, _pipeline, store, _telemetry = make_client()
 
     health = client.get("/health")
     metrics = client.get("/metrics")
@@ -132,15 +135,14 @@ def test_health_and_metrics_delegate_to_injected_services() -> None:
     assert health.json() == {"status": "ok"}
     assert store.health_checks == 1
     assert metrics.status_code == 200
-    assert metrics.json() == {
-        "raw_posts": 3,
-        "normalized_posts": 2,
-        "complaints": 1,
-    }
+    assert metrics.headers["content-type"].startswith("text/plain;")
+    assert 'signalmine_stage_records{stage="raw"} 3.0' in metrics.text
+    assert 'signalmine_stage_records{stage="normalized"} 2.0' in metrics.text
+    assert 'signalmine_stage_records{stage="complaint"} 1.0' in metrics.text
 
 
 def test_process_rejects_invalid_or_extra_request_fields() -> None:
-    client, _pipeline, _store = make_client()
+    client, _pipeline, _store, _telemetry = make_client()
 
     invalid_url = client.post("/process", json={"url": "not-a-url"})
     extra_field = client.post(
@@ -153,3 +155,13 @@ def test_process_rejects_invalid_or_extra_request_fields() -> None:
 
     assert invalid_url.status_code == 422
     assert extra_field.status_code == 422
+
+
+def test_request_id_is_propagated_or_generated() -> None:
+    client, _pipeline, _store, _telemetry = make_client()
+
+    supplied = client.get("/health", headers={"X-Request-ID": "request-123"})
+    generated = client.get("/health", headers={"X-Request-ID": "unsafe id"})
+
+    assert supplied.headers["X-Request-ID"] == "request-123"
+    UUID(generated.headers["X-Request-ID"])

@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from backend.app.api.dependencies import (
     get_complaint_service,
@@ -14,7 +14,6 @@ from backend.app.api.dependencies import (
 from backend.app.api.schemas import (
     ComplaintResponse,
     HealthResponse,
-    MetricsResponse,
     ProcessRequest,
 )
 from backend.app.api.services import (
@@ -59,10 +58,14 @@ def get_health(
     return service.get()
 
 
-@router.get("/metrics", response_model=MetricsResponse)
+@router.get("/metrics", response_class=Response)
 def get_metrics(
     service: Annotated[MetricsService, Depends(get_metrics_service)],
-) -> MetricsResponse:
-    """Return persisted stage counts."""
+) -> Response:
+    """Return Prometheus metrics."""
 
-    return service.get()
+    metrics = service.get()
+    return Response(
+        content=metrics.body,
+        headers={"Content-Type": metrics.content_type},
+    )

@@ -24,6 +24,7 @@ from backend.app.collector.exceptions import (
     RedditResourceUnavailableError,
 )
 from backend.app.collector.settings import RedditSettings
+from backend.app.observability import NoOpTelemetry, TelemetryRecorder
 
 RawRedditCapture = dict[str, Any]
 T = TypeVar("T")
@@ -39,11 +40,13 @@ class RedditCollector:
         *,
         sleeper: Callable[[float], None] = sleep,
         clock: Callable[[], datetime] | None = None,
+        telemetry: TelemetryRecorder | None = None,
     ) -> None:
         self._settings = settings
         self._reddit = reddit if reddit is not None else self._build_client(settings)
         self._sleep = sleeper
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
+        self._telemetry = telemetry or NoOpTelemetry()
 
     def fetch_post(self, url: str) -> RawRedditCapture:
         """Fetch one Reddit submission by URL."""
@@ -112,13 +115,17 @@ class RedditCollector:
                     raise RedditRateLimitError(
                         "Reddit rate limit retries exhausted"
                     ) from exc
-                self._sleep(self._retry_delay(attempt, exc))
+                delay = self._retry_delay(attempt, exc)
+                self._telemetry.record_retry("reddit", "rate_limit", delay)
+                self._sleep(delay)
             except (RequestException, ServerError) as exc:
                 if attempt + 1 >= self._settings.retry_attempts:
                     raise RedditNetworkError(
                         "Reddit network retries exhausted"
                     ) from exc
-                self._sleep(self._retry_delay(attempt))
+                delay = self._retry_delay(attempt)
+                self._telemetry.record_retry("reddit", "network", delay)
+                self._sleep(delay)
             except (Forbidden, NotFound) as exc:
                 raise RedditResourceUnavailableError(
                     "Reddit resource is unavailable"

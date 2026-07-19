@@ -4,12 +4,14 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Protocol, cast
 from uuid import UUID
 
 import instructor
 from instructor.core.exceptions import InstructorRetryException
 from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.protocols import Validator
 from openai import OpenAI
 from pydantic import ValidationError as PydanticValidationError
@@ -22,6 +24,7 @@ from backend.app.extractor.models import (
 from backend.app.extractor.prompt import ExtractionPrompt
 from backend.app.extractor.settings import ExtractionSettings
 from backend.app.normalizer import NormalizedPost
+from backend.app.observability import NoOpTelemetry, TelemetryRecorder
 from backend.app.validator.complaint import (
     ComplaintValidationError,
     ComplaintValidator,
@@ -65,6 +68,7 @@ class ExtractionEngine:
         prompt_path: Path | None = None,
         schema_directory: Path | None = None,
         clock: Callable[[], datetime] | None = None,
+        telemetry: TelemetryRecorder | None = None,
     ) -> None:
         self._settings = settings
         self._client = client if client is not None else self._build_client(settings)
@@ -75,20 +79,29 @@ class ExtractionEngine:
             self._load_schema(schema_path / "normalized_document.json"),
             format_checker=format_checker,
         )
-        self._complaint_validator = ComplaintValidator(schema_path)
+        self._telemetry = telemetry or NoOpTelemetry()
+        self._complaint_validator = ComplaintValidator(
+            schema_path,
+            telemetry=self._telemetry,
+        )
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
 
     def extract(self, normalized: NormalizedPost) -> Complaint:
         """Extract one complaint, retrying response validation failures only."""
 
-        self._normalized_validator.validate(normalized)
+        try:
+            self._normalized_validator.validate(normalized)
+        except JsonSchemaValidationError:
+            self._telemetry.record_validation_failure("normalized_schema")
+            raise
         messages = [
             {"role": "system", "content": self._prompt.system_prompt},
             {"role": "user", "content": self._prompt.render_user(normalized)},
         ]
         last_error: Exception | None = None
 
-        for _attempt in range(self._settings.validation_retries + 1):
+        for attempt in range(self._settings.validation_retries + 1):
+            started_at = perf_counter()
             try:
                 raw_candidate = self._client.chat.completions.create(
                     model=self._settings.model,
@@ -99,17 +112,43 @@ class ExtractionEngine:
                 )
                 candidate = ComplaintCandidate.model_validate(raw_candidate)
                 complaint = self._complete_complaint(candidate, normalized)
-                return self._complaint_validator.validate(complaint, normalized)
+                validated = self._complaint_validator.validate(
+                    complaint,
+                    normalized,
+                )
             except (
                 InstructorRetryException,
                 PydanticValidationError,
                 ComplaintValidationError,
             ) as exc:
+                self._telemetry.observe_extraction_latency(
+                    started_at,
+                    "validation_failure",
+                )
+                reason = self._validation_failure_reason(exc)
+                if not isinstance(exc, ComplaintValidationError):
+                    self._telemetry.record_validation_failure(reason)
                 last_error = exc
+                if attempt < self._settings.validation_retries:
+                    self._telemetry.record_retry("extraction", reason)
+            except Exception:
+                self._telemetry.observe_extraction_latency(started_at, "error")
+                raise
+            else:
+                self._telemetry.observe_extraction_latency(started_at, "success")
+                return validated
 
         raise ExtractionValidationError(
             "extraction response validation retries exhausted"
         ) from last_error
+
+    @staticmethod
+    def _validation_failure_reason(error: Exception) -> str:
+        if isinstance(error, InstructorRetryException):
+            return "instructor_response"
+        if isinstance(error, PydanticValidationError):
+            return "pydantic_response"
+        return "complaint_validation"
 
     def _complete_complaint(
         self,

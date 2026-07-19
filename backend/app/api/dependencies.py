@@ -15,11 +15,14 @@ from backend.app.api.services import (
 from backend.app.collector import RedditCollector, RedditSettings
 from backend.app.config import (
     DatabaseSettings,
+    Settings,
+    configure_logging,
     create_database_engine,
     create_session_factory,
 )
 from backend.app.extractor import ExtractionEngine, ExtractionSettings
 from backend.app.normalizer import RedditNormalizer
+from backend.app.observability import ObservabilitySettings, Telemetry
 from backend.app.pipeline import SynchronousPipeline
 from backend.app.storage import SQLAlchemyStageStore
 from backend.app.validator import ComplaintValidator
@@ -35,27 +38,38 @@ class ApiContainer:
     complaints: ComplaintQueryService
     health: HealthService
     metrics: MetricsService
+    telemetry: Telemetry
 
 
 def build_container() -> ApiContainer:
     """Build production dependencies from environment-backed settings."""
 
+    configure_logging(_environment_settings(Settings))
+    telemetry = Telemetry(_environment_settings(ObservabilitySettings))
     database_settings = _environment_settings(DatabaseSettings)
-    store = SQLAlchemyStageStore(
-        create_session_factory(create_database_engine(database_settings))
-    )
+    engine = create_database_engine(database_settings)
+    telemetry.instrument_engine(engine)
+    store = SQLAlchemyStageStore(create_session_factory(engine))
     pipeline = SynchronousPipeline(
-        collector=RedditCollector(_environment_settings(RedditSettings)),
+        collector=RedditCollector(
+            _environment_settings(RedditSettings),
+            telemetry=telemetry,
+        ),
         normalizer=RedditNormalizer(),
-        extractor=ExtractionEngine(_environment_settings(ExtractionSettings)),
-        validator=ComplaintValidator(),
+        extractor=ExtractionEngine(
+            _environment_settings(ExtractionSettings),
+            telemetry=telemetry,
+        ),
+        validator=ComplaintValidator(telemetry=telemetry),
         storage=store,
+        telemetry=telemetry,
     )
     return ApiContainer(
         processing=ProcessingService(pipeline, store),
         complaints=ComplaintQueryService(store),
         health=HealthService(store),
-        metrics=MetricsService(store),
+        metrics=MetricsService(store, telemetry),
+        telemetry=telemetry,
     )
 
 

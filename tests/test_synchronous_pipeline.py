@@ -15,6 +15,7 @@ from backend.app.extractor import (
     TextField,
     TriStateField,
 )
+from backend.app.observability import ObservabilitySettings, Telemetry
 from backend.app.pipeline import SynchronousPipeline
 from backend.app.validator import ComplaintValidationError, ComplaintValidator
 
@@ -193,6 +194,37 @@ def test_complaint_validator_returns_valid_complaint_unchanged() -> None:
 
 def test_complaint_validator_rejects_out_of_range_evidence() -> None:
     complaint = make_complaint(evidence_end=100)
+    telemetry = Telemetry(ObservabilitySettings(service_name="validator-tests"))
 
     with pytest.raises(ComplaintValidationError):
-        ComplaintValidator().validate(complaint, make_normalized())
+        ComplaintValidator(telemetry=telemetry).validate(
+            complaint,
+            make_normalized(),
+        )
+
+    assert (
+        'signalmine_validation_failures_total{gate="provenance"} 1.0'
+        in telemetry.render_prometheus().decode()
+    )
+
+
+def test_pipeline_records_run_and_stage_timings() -> None:
+    pipeline, collector, normalizer, extractor, validator, _events = make_pipeline()
+    telemetry = Telemetry(ObservabilitySettings(service_name="pipeline-tests"))
+    instrumented = SynchronousPipeline(
+        collector,
+        normalizer,
+        extractor,
+        validator,
+        telemetry=telemetry,
+    )
+
+    instrumented.process_url("https://www.reddit.com/r/devops/comments/post1/")
+
+    metrics = telemetry.render_prometheus().decode()
+    assert 'signalmine_pipeline_runs_total{outcome="success"} 1.0' in metrics
+    for stage in ("collect", "normalize", "extract", "validate"):
+        assert (
+            "signalmine_pipeline_stage_duration_seconds_count"
+            f'{{outcome="success",stage="{stage}"}} 1.0' in metrics
+        )
