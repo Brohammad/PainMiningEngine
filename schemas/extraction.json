@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://signalmine.local/schemas/extraction.json",
+  "title": "PainExtraction",
+  "description": "Evidence-grounded pain intelligence with span-level provenance. Prefer null/unknown over speculation. Every non-null claim must trace to a character range in the source document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "pain_summary",
+    "workflow",
+    "workaround",
+    "buyer",
+    "budget_owner",
+    "time_cost",
+    "industry",
+    "existing_tools",
+    "meta"
+  ],
+  "properties": {
+    "pain_summary": { "$ref": "#/$defs/textField" },
+    "workflow": { "$ref": "#/$defs/textField" },
+    "workaround": { "$ref": "#/$defs/textField" },
+    "buyer": { "$ref": "#/$defs/textField" },
+    "budget_owner": { "$ref": "#/$defs/triStateField" },
+    "time_cost": { "$ref": "#/$defs/textField" },
+    "industry": { "$ref": "#/$defs/textField" },
+    "existing_tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/toolMention" },
+      "default": []
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "prompt_version",
+        "source_id",
+        "document_id",
+        "extracted_at"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Model id used for extraction (e.g. gpt-4.1-mini)."
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable prompt id, e.g. extract_v1."
+        },
+        "source_id": {
+          "type": "string",
+          "description": "Platform external_id of the source thread."
+        },
+        "document_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "normalized_documents.id"
+        },
+        "extracted_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "field", "character_range", "confidence"],
+      "description": "Pointer into the normalized document. character_range is a half-open [start, end) index into the referenced field text using Unicode code points.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["reddit", "github", "hackernews"],
+          "description": "Platform the span was taken from. V1 always reddit."
+        },
+        "field": {
+          "type": "string",
+          "enum": ["title", "body", "comment"],
+          "description": "Which document field the span indexes. body maps to normalized content."
+        },
+        "comment_id": {
+          "type": ["string", "null"],
+          "description": "Required when field is comment; null otherwise. Matches normalized comments[].id."
+        },
+        "character_range": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "Half-open [start, end) into the field text. Must satisfy start < end and end <= len(field_text)."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence that this span supports the claim; not a substitute for eval."
+        }
+      }
+    },
+    "evidenceList": {
+      "type": "array",
+      "description": "Provenance spans supporting the claim. Empty when value is null/unknown-unsupported. Highest-confidence span first.",
+      "items": { "$ref": "#/$defs/provenance" },
+      "default": []
+    },
+    "textField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence"],
+      "properties": {
+        "value": {
+          "type": ["string", "null"],
+          "description": "Extracted claim, or null if unsupported by the text."
+        },
+        "evidence": { "$ref": "#/$defs/evidenceList" }
+      }
+    },
+    "triStateField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "enum": ["true", "false", "unknown"],
+          "description": "Whether the speaker appears to own or control budget. Default to unknown."
+        },
+        "evidence": { "$ref": "#/$defs/evidenceList" }
+      }
+    },
+    "toolMention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "evidence"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/provenance" },
+          "description": "At least one span where the tool is mentioned."
+        }
+      }
+    }
+  }
+}

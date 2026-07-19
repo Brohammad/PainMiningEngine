@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://signalmine.local/schemas/normalized_document.json",
+  "title": "NormalizedDocument",
+  "description": "Platform-agnostic discussion document produced by the normalizer. V1 maps from Reddit; later sources (GitHub, HN) target this same shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "platform",
+    "external_id",
+    "url",
+    "title",
+    "content",
+    "comments",
+    "author",
+    "score",
+    "created_at",
+    "fetched_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Internal document id (matches normalized_documents.id)."
+    },
+    "raw_source_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "FK to raw_sources.id when persisted."
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["reddit", "github", "hackernews"],
+      "description": "V1 production path uses reddit only."
+    },
+    "external_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable id on the source platform."
+    },
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "title": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string",
+      "description": "Primary body text (Reddit selftext). Empty string if link-only."
+    },
+    "comments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/comment" }
+    },
+    "author": {
+      "type": ["string", "null"]
+    },
+    "score": {
+      "type": "integer"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "fetched_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "community": {
+      "type": ["string", "null"],
+      "description": "Subreddit, repo full name, or HN null."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Non-canonical extras (flair, upvote_ratio, num_comments, etc.)."
+    }
+  },
+  "$defs": {
+    "comment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "body", "author", "score", "created_at"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "body": { "type": "string" },
+        "author": { "type": ["string", "null"] },
+        "score": { "type": "integer" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "parent_id": { "type": ["string", "null"] },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    }
+  }
+}

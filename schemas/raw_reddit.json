@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://signalmine.local/schemas/raw_reddit.json",
+  "title": "RawRedditCapture",
+  "description": "API-faithful Reddit capture as stored in raw_sources.payload. Preserve provider fields; do not normalize here.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["fetched_at", "source", "post"],
+  "properties": {
+    "fetched_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp when this payload was fetched."
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "external_id", "permalink", "subreddit"],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "const": "reddit"
+        },
+        "external_id": {
+          "type": "string",
+          "description": "Reddit fullname or thing id (e.g. t3_abc123).",
+          "minLength": 1
+        },
+        "permalink": {
+          "type": "string",
+          "format": "uri"
+        },
+        "subreddit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "api": {
+          "type": "string",
+          "description": "Fetcher identifier, e.g. public_json, praw, pushshift_export."
+        }
+      }
+    },
+    "post": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "title", "selftext", "author", "score", "created_utc", "url", "permalink", "subreddit"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "description": "Fullname if available (t3_...)." },
+        "title": { "type": "string" },
+        "selftext": { "type": "string" },
+        "author": { "type": ["string", "null"] },
+        "score": { "type": "integer" },
+        "upvote_ratio": { "type": ["number", "null"] },
+        "num_comments": { "type": ["integer", "null"] },
+        "created_utc": {
+          "type": "number",
+          "description": "Unix epoch seconds from Reddit."
+        },
+        "url": { "type": "string" },
+        "permalink": { "type": "string" },
+        "subreddit": { "type": "string" },
+        "link_flair_text": { "type": ["string", "null"] },
+        "over_18": { "type": ["boolean", "null"] },
+        "is_self": { "type": ["boolean", "null"] }
+      }
+    },
+    "comments": {
+      "type": "array",
+      "description": "Top-level and nested comments as returned by the fetcher. Shape may vary by API; normalizer is responsible for flattening.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "body", "author", "score", "created_utc"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "body": { "type": "string" },
+          "author": { "type": ["string", "null"] },
+          "score": { "type": "integer" },
+          "created_utc": { "type": "number" },
+          "parent_id": { "type": ["string", "null"] },
+          "depth": { "type": ["integer", "null"] },
+          "permalink": { "type": ["string", "null"] }
+        }
+      },
+      "default": []
+    },
+    "fetch_meta": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "comment_limit": { "type": "integer" },
+        "comment_sort": { "type": "string" },
+        "user_agent": { "type": "string" }
+      }
+    }
+  }
+}
