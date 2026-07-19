@@ -21,6 +21,7 @@ The current implementation provides:
 - direct synchronous collector → normalizer → extractor → validator orchestration
 - insert-only SQLAlchemy persistence for every pipeline stage
 - Typer commands for stage-by-stage JSON workflows
+- golden-dataset extraction metrics and Markdown reports
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
 - standard-library logging configuration
@@ -43,6 +44,7 @@ clustering, opportunity scoring, workers, or frontend.
 | `backend.app.config` | Settings, logging setup, and the explicit dependency container. |
 | `backend.app.utils` | Shared side-effect-free helpers that do not belong to a domain package. |
 | `backend.app.pipeline` | Direct synchronous orchestration from collection through final validation, returning a Complaint. |
+| `backend.app.evaluation` | Golden dataset loading, extraction comparison, metrics, and Markdown reporting. |
 
 Dependencies should point inward through explicit constructor or function
 arguments. Entry points will own composition and pass an
@@ -295,6 +297,46 @@ signalmine process \
 The CLI composes existing application boundaries and adds no FastAPI server,
 frontend, worker, or asynchronous execution. The `process` command does not
 inject persistence; stage storage remains an explicit application choice.
+
+## Evaluation framework
+
+Golden fixtures follow the Phase 0 layout:
+
+```text
+golden/
+  <case-id>/
+    normalized.json
+    gold.json
+```
+
+`raw.json` may replace `normalized.json`; the loader then runs the deterministic
+Reddit normalizer. `gold.json` contains the model-owned extraction fields.
+Host metadata is ignored during comparison. An optional top-level
+`acceptable_values` object can list accepted text alternatives by field.
+
+```python
+from pathlib import Path
+
+from backend.app.evaluation import (
+    EvaluationRunner,
+    GoldenDataset,
+    MarkdownReport,
+)
+from backend.app.extractor import ExtractionEngine, ExtractionSettings
+
+dataset = GoldenDataset.load(Path("golden"))
+result = EvaluationRunner(
+    ExtractionEngine(ExtractionSettings())
+).run(dataset)
+MarkdownReport.write(result, Path("evaluation.md"))
+```
+
+The report includes JSON validity, aggregate precision and recall,
+field-level accuracy, missing values, hallucinated values, per-field metrics,
+and per-case discrepancies. Text matching is case-insensitive with normalized
+whitespace; tool names use set comparison. Provider failures propagate, while
+extraction-validation failures are recorded as invalid outputs. The framework
+produces Markdown only—no dashboard or UI.
 
 ## Development
 

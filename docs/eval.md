@@ -39,10 +39,14 @@ Suggested layout (when coding starts):
 ```text
 tests/fixtures/eval/
   <external_id>/
-    raw.json              # raw_reddit payload
-    normalized.json       # optional cached normalize output
+    normalized.json       # extraction input
+    raw.json              # alternative when normalized.json is absent
     gold.json             # hand labels
 ```
+
+The implemented loader requires `gold.json` and either `normalized.json` or
+`raw.json`. When only raw input exists, it runs the deterministic Reddit
+normalizer before extraction. Cases are processed in sorted directory order.
 
 ## Scoring rubric
 
@@ -116,6 +120,10 @@ Copied from [product.md](product.md):
 3. Compute metrics; write `eval_report.md` (gitignored or committed under `tests/reports/` — team choice at impl time).
 4. Fail the gate → fix prompt/schema/normalizer, do **not** expand product scope.
 5. Pass the gate → allowed to scale Reddit ingest and plan Phase 5+.
+
+`EvaluationRunner` computes JSON validity, precision, recall, field-level
+accuracy, missing values, and hallucinated values. `MarkdownReport` emits the
+aggregate, per-field, and per-case results without a dashboard.
 
 ## Non-goals for V1 eval
 
