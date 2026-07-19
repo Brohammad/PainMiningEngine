@@ -42,6 +42,7 @@ erDiagram
     text prompt_version
     text model
     jsonb result
+    text result_hash
     timestamptz extracted_at
   }
 ```
@@ -63,7 +64,7 @@ Immutable capture of provider payloads.
 
 **Constraints**
 
-- `UNIQUE (platform, external_id)` — idempotent re-fetch updates are out of scope for V1; re-fetch of the same id should no-op or replace payload in a controlled upsert (implementation choice documented in architecture). Preferred V1 behavior: **upsert payload + fetched_at**, keep same `id`.
+- `UNIQUE (platform, external_id)` — an idempotent repeat returns the existing row. The insert-only repository never updates the stored payload.
 
 ### `normalized_documents`
 
@@ -104,6 +105,7 @@ Versioned LLM outputs. Re-running extraction **inserts a new row**; never mutate
 | `prompt_version` | `text` NOT NULL | e.g. `extract_v1` |
 | `model` | `text` NOT NULL | |
 | `result` | `jsonb` NOT NULL | Must validate as [`schemas/extraction.json`](../schemas/extraction.json) |
+| `result_hash` | `text` NOT NULL | SHA-256 of canonical result JSON for idempotency |
 | `extracted_at` | `timestamptz` NOT NULL | |
 
 **Indexes**
@@ -111,7 +113,10 @@ Versioned LLM outputs. Re-running extraction **inserts a new row**; never mutate
 - `(document_id, extracted_at DESC)` — latest extraction per document
 - Optional later: GIN on `result` for JSON path queries
 
-**No unique on (document_id, prompt_version)** — intentional. Multiple runs with the same prompt/model are kept for eval and regression comparison.
+**Constraints**
+
+- `UNIQUE (document_id, result_hash)` — inserting the exact same result is idempotent.
+- There is intentionally no unique constraint on `(document_id, prompt_version)`. Different results from repeated runs remain separate immutable versions.
 
 ## Invariants
 
@@ -119,6 +124,7 @@ Versioned LLM outputs. Re-running extraction **inserts a new row**; never mutate
 2. Normalization is pure / deterministic given a raw payload + normalizer version (normalizer version can live in `metadata` later; not required for week 1).
 3. Every non-null `extractions.result` claim must carry at least one provenance span (`source`, `field`, `character_range`, `confidence`) that slices validly into the linked document’s title, body (`content`), or a comment body (`comment_id` required when `field` is `comment`).
 4. `budget_owner.value` is always one of `true` | `false` | `unknown` — never a bare boolean in storage.
+5. Persistence is insert-only. Idempotent conflicts return an existing row; stage rows are never updated.
 
 ## Deferred tables (do not create yet)
 

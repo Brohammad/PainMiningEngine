@@ -9,13 +9,16 @@ description = "Evidence-backed market intelligence from internet discussions."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.18.5",
     "instructor>=1.15.4",
     "jsonschema>=4.26.0",
     "markdown-it-py>=4.2.0",
     "openai>=2.46.0",
     "praw>=8.0.2",
+    "psycopg[binary]>=3.3.4",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.0",
+    "sqlalchemy>=2.0",
 ]
 
 [project.optional-dependencies]

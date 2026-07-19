@@ -3,7 +3,8 @@
 SignalMine turns unstructured internet discussions into structured,
 evidence-backed market intelligence. The current repository contains the
 approved Phase 0 contracts, the Python backend skeleton, and the Reddit
-collector, normalizer, and extraction engine. It does not persist data yet.
+collector, normalizer, extraction engine, synchronous pipeline, and persistence
+layer.
 
 The product definition and constraints are authoritative in
 [`docs/`](docs/). The canonical data contracts are the JSON Schemas in
@@ -18,6 +19,7 @@ The current implementation provides:
 - deterministic RawReddit-to-NormalizedDocument conversion
 - Instructor-backed extraction into the complaint contract
 - direct synchronous collector → normalizer → extractor → validator orchestration
+- insert-only SQLAlchemy persistence for every pipeline stage
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
 - standard-library logging configuration
@@ -34,7 +36,7 @@ clustering, opportunity scoring, workers, or frontend.
 | `backend.app.normalizer` | Deterministic conversion of RawReddit captures into the canonical NormalizedDocument contract. |
 | `backend.app.extractor` | Instructor-backed extraction of validated complaints with span-level provenance from normalized documents. |
 | `backend.app.validator` | Final Pydantic, JSON Schema, and provenance validation for complaints. |
-| `backend.app.storage` | Persistence boundary for raw, normalized, and versioned extraction artifacts. No database models exist yet. |
+| `backend.app.storage` | Insert-only SQLAlchemy persistence for raw, normalized, and versioned extraction artifacts. |
 | `backend.app.schemas` | Future Python representations of the JSON contracts in the repository-level `schemas/` directory. |
 | `backend.app.models` | Persistence-independent domain model boundary. |
 | `backend.app.config` | Settings, logging setup, and the explicit dependency container. |
@@ -198,10 +200,67 @@ complaint = pipeline.process_url(
 )
 ```
 
-The pipeline has no database, HTTP API, workers, queues, or asynchronous
-orchestration. Components are injected explicitly; given the same component
-outputs, orchestration returns the same complaint. Extraction requests use
-temperature zero.
+The pipeline has no HTTP API, workers, queues, or asynchronous orchestration.
+Persistence is enabled only when storage is injected. Components are explicit;
+given the same component outputs, orchestration returns the same complaint.
+Extraction requests use temperature zero.
+
+## Persistence
+
+Persistence uses SQLAlchemy 2.x, Alembic, and PostgreSQL through psycopg. The
+three Phase 0 stages remain separate:
+
+| Python model | Table | Contents |
+|--------------|-------|----------|
+| `RawPost` | `raw_sources` | Original RawReddit payload |
+| `NormalizedPost` | `normalized_documents` | Canonical normalized fields |
+| `Complaint` | `extractions` | Versioned complaint result |
+
+`SQLAlchemyStageStore` exposes `save_raw`, `save_normalized`, and
+`save_complaint`. Each method owns and commits its own transaction. Inserts are
+idempotent: repeated natural keys or identical complaint results return the
+existing row ID. Existing rows are never updated. A different extraction
+result remains a new immutable version.
+
+Configure the database with:
+
+| Environment variable | Required / default |
+|----------------------|--------------------|
+| `DATABASE_URL` | Required; e.g. `postgresql+psycopg://...` |
+| `DATABASE_ECHO` | `false` |
+| `DATABASE_POOL_PRE_PING` | `true` |
+
+Run migrations:
+
+```bash
+DATABASE_URL=postgresql+psycopg://... uv run alembic upgrade head
+```
+
+Inject persistence into the existing synchronous pipeline:
+
+```python
+from backend.app.config import (
+    DatabaseSettings,
+    create_database_engine,
+    create_session_factory,
+)
+from backend.app.storage import SQLAlchemyStageStore
+
+engine = create_database_engine(DatabaseSettings())
+store = SQLAlchemyStageStore(create_session_factory(engine))
+
+pipeline = SynchronousPipeline(
+    collector=RedditCollector(RedditSettings()),
+    normalizer=RedditNormalizer(),
+    extractor=ExtractionEngine(ExtractionSettings()),
+    validator=ComplaintValidator(),
+    storage=store,
+)
+```
+
+The pipeline persists raw and normalized stages before extraction. If a later
+stage fails, earlier completed stages remain committed and can be processed
+again. No API, UI, queue, or worker is included.
 
 ## Development
 

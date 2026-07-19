@@ -68,11 +68,12 @@ flowchart LR
 
 | Step | Behavior |
 |------|----------|
-| Ingest same `(platform, external_id)` | Upsert: update `payload` + `fetched_at`, keep `raw_sources.id` |
-| Normalize | Upsert on `(platform, external_id)` / `raw_source_id`; overwrite normalized fields from latest raw |
-| Extract | **Always insert** new `extractions` row. Downstream readers use latest by `extracted_at` unless a specific `extraction.id` is requested |
+| Ingest same `(platform, external_id)` | Return the existing immutable `raw_sources` row; never update its payload |
+| Normalize same `(platform, external_id)` / `raw_source_id` | Return the existing immutable `normalized_documents` row |
+| Extract identical result | Return the existing row using `(document_id, result_hash)` |
+| Extract different result | Insert a new immutable `extractions` row |
 
-Raw rows are not deleted or LLM-mutated.
+No stage row is overwritten by the pipeline.
 
 ## Data contracts
 
