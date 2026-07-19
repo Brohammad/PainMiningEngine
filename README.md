@@ -2,8 +2,8 @@
 
 SignalMine turns unstructured internet discussions into structured,
 evidence-backed market intelligence. The current repository contains the
-approved Phase 0 contracts and a passive Python backend skeleton. It does not
-collect, normalize, extract, validate, or persist data yet.
+approved Phase 0 contracts, the Python backend skeleton, and the Reddit
+collector. It does not normalize, extract, validate, or persist data yet.
 
 The product definition and constraints are authoritative in
 [`docs/`](docs/). The canonical data contracts are the JSON Schemas in
@@ -11,22 +11,23 @@ The product definition and constraints are authoritative in
 
 ## Current scope
 
-This skeleton provides:
+The current implementation provides:
 
 - Python package boundaries for the synchronous V1 pipeline
+- PRAW-backed Reddit collection into the Phase 0 raw schema
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
 - standard-library logging configuration
 - Ruff, Black, and Mypy configuration
 
-It deliberately contains no Reddit integration, LLM calls, database models,
-FastAPI endpoints, workers, or frontend.
+It deliberately contains no normalization, LLM calls, database models, FastAPI
+endpoints, workers, or frontend.
 
 ## Backend package responsibilities
 
 | Package | Responsibility |
 |---------|----------------|
-| `backend.app.collector` | Boundary for acquiring raw discussion payloads. The V1 implementation will target Reddit, but no client exists yet. |
+| `backend.app.collector` | PRAW-backed acquisition of Reddit posts, subreddit listings, and search results mapped directly to the raw Reddit contract. |
 | `backend.app.normalizer` | Boundary for deterministic conversion of raw payloads into the canonical normalized document contract. |
 | `backend.app.extractor` | Boundary for producing structured market-intelligence candidates from normalized documents. |
 | `backend.app.validator` | Boundary for JSON contract validation and provenance span checks before persistence. |
@@ -58,6 +59,42 @@ Available skeleton settings:
 An optional local `.env` file is supported and ignored by Git. Importing the
 package does not read environment variables or configure logging.
 
+## Reddit collector
+
+`RedditCollector` is read-only and returns dictionaries matching
+[`schemas/raw_reddit.json`](schemas/raw_reddit.json). It preserves `[deleted]`
+and `[removed]` body markers, maps absent authors to `null`, collects top
+comments within the configured depth, and retries transient network and
+rate-limit failures.
+
+PRAW credentials and collector behavior are loaded from environment variables:
+
+| Environment variable | Required / default |
+|----------------------|--------------------|
+| `REDDIT_CLIENT_ID` | Required |
+| `REDDIT_CLIENT_SECRET` | Required |
+| `REDDIT_USER_AGENT` | Required |
+| `REDDIT_REQUEST_TIMEOUT_SECONDS` | `10` |
+| `REDDIT_RATE_LIMIT_WAIT_SECONDS` | `60` |
+| `REDDIT_RETRY_ATTEMPTS` | `3` |
+| `REDDIT_RETRY_BACKOFF_SECONDS` | `1.0` |
+| `REDDIT_COMMENT_LIMIT` | `20` |
+| `REDDIT_COMMENT_MAX_DEPTH` | `3` |
+
+Copy `.env.example` to `.env` for local development. Construct dependencies
+explicitly:
+
+```python
+from backend.app.collector import RedditCollector, RedditSettings
+
+collector = RedditCollector(RedditSettings())
+capture = collector.fetch_post("https://www.reddit.com/r/example/comments/id/title/")
+```
+
+`fetch_subreddit(subreddit, limit)` and
+`fetch_search(query, subreddit, limit)` return lists of the same raw capture
+shape. The collector performs no normalization, extraction, or persistence.
+
 ## Development
 
 Python 3.11 or newer is required.
@@ -74,6 +111,7 @@ Run the quality checks:
 ruff check .
 black --check .
 mypy backend
+pytest
 python -m build
 ```
 
