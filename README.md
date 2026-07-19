@@ -4,7 +4,7 @@ SignalMine turns unstructured internet discussions into structured,
 evidence-backed market intelligence. The current repository contains the
 approved Phase 0 contracts, the Python backend skeleton, and the Reddit
 collector, normalizer, extraction engine, synchronous pipeline, and persistence
-layer.
+layer, plus a dependency-injected REST API.
 
 The product definition and constraints are authoritative in
 [`docs/`](docs/). The canonical data contracts are the JSON Schemas in
@@ -22,13 +22,14 @@ The current implementation provides:
 - insert-only SQLAlchemy persistence for every pipeline stage
 - Typer commands for stage-by-stage JSON workflows
 - golden-dataset extraction metrics and Markdown reports
+- FastAPI endpoints for processing, complaint reads, health, and stage metrics
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
 - standard-library logging configuration
 - Ruff, Black, and Mypy configuration
 
-It deliberately contains no database models, FastAPI endpoints, embeddings,
-clustering, opportunity scoring, workers, or frontend.
+It deliberately contains no authentication, embeddings, clustering,
+opportunity scoring, workers, or frontend.
 
 ## Backend package responsibilities
 
@@ -45,6 +46,7 @@ clustering, opportunity scoring, workers, or frontend.
 | `backend.app.utils` | Shared side-effect-free helpers that do not belong to a domain package. |
 | `backend.app.pipeline` | Direct synchronous orchestration from collection through final validation, returning a Complaint. |
 | `backend.app.evaluation` | Golden dataset loading, extraction comparison, metrics, and Markdown reporting. |
+| `backend.app.api` | Thin FastAPI routes, transport schemas, application services, and the explicit API composition root. |
 
 Dependencies should point inward through explicit constructor or function
 arguments. Entry points will own composition and pass an
@@ -181,8 +183,7 @@ Collector → Normalizer → Extractor → Validator → Complaint
 `process_url(url)` collects a Reddit URL and runs the complete flow.
 `process_post(post)` accepts an already-collected RawReddit object and starts at
 normalization. Both methods block until they return the final validated
-`Complaint`; they do not enqueue work, mutate the input, cache results, or
-write to storage.
+`Complaint`; they do not enqueue work, mutate the input, or cache results.
 
 ```python
 from backend.app.collector import RedditCollector, RedditSettings
@@ -203,10 +204,10 @@ complaint = pipeline.process_url(
 )
 ```
 
-The pipeline has no HTTP API, workers, queues, or asynchronous orchestration.
-Persistence is enabled only when storage is injected. Components are explicit;
-given the same component outputs, orchestration returns the same complaint.
-Extraction requests use temperature zero.
+The pipeline has no HTTP concerns, workers, queues, or asynchronous
+orchestration. Persistence is enabled only when storage is injected. Components
+are explicit; given the same component outputs, orchestration returns the same
+complaint. Extraction requests use temperature zero.
 
 ## Persistence
 
@@ -263,7 +264,32 @@ pipeline = SynchronousPipeline(
 
 The pipeline persists raw and normalized stages before extraction. If a later
 stage fails, earlier completed stages remain committed and can be processed
-again. No API, UI, queue, or worker is included.
+again. No UI, queue, or worker is included.
+
+## REST API
+
+Create the API through its factory so each application owns an explicit
+dependency container:
+
+```bash
+uv run uvicorn backend.app.api:create_app --factory
+```
+
+The production composition root reads the existing `REDDIT_*`, `EXTRACTION_*`,
+and `DATABASE_*` environment variables. Apply Alembic migrations before
+starting the server.
+
+| Method | Path | Contract |
+|--------|------|----------|
+| `POST` | `/process` | Accepts `{"url": "https://..."}`; runs and persists the synchronous pipeline; returns the extraction ID and Complaint |
+| `GET` | `/complaints/{id}` | Returns a persisted extraction ID and Complaint, or `404` |
+| `GET` | `/health` | Checks database connectivity and returns `{"status": "ok"}` |
+| `GET` | `/metrics` | Returns row counts for raw, normalized, and complaint stages |
+
+Routes only translate HTTP inputs and outputs. Application services own
+orchestration, and storage owns database queries. Tests can inject an
+`ApiContainer` into `create_app`; importing the API creates no clients,
+settings, engines, or service singletons.
 
 ## Command-line interface
 

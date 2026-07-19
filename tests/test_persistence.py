@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -138,6 +138,12 @@ def test_stage_store_is_idempotent_and_never_overwrites(
     complaint_id = store.save_complaint(complaint, normalized_id)
     assert store.save_complaint(complaint, normalized_id) == complaint_id
     assert stage_counts(factory) == (1, 1, 1)
+    assert store.get_complaint(complaint_id) == complaint
+    assert store.get_complaint(uuid4()) is None
+    assert store.count_stages().raw_posts == 1
+    assert store.count_stages().normalized_posts == 1
+    assert store.count_stages().complaints == 1
+    store.check_health()
 
     later = make_complaint(
         normalized_id,

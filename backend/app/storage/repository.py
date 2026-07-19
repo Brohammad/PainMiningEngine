@@ -2,12 +2,13 @@
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -15,6 +16,15 @@ from backend.app.collector import RawRedditCapture
 from backend.app.extractor import Complaint as ComplaintSchema
 from backend.app.normalizer import NormalizedPost as NormalizedPostSchema
 from backend.app.storage.models import Complaint, NormalizedPost, RawPost
+
+
+@dataclass(frozen=True, slots=True)
+class StageCounts:
+    """Current row counts for each independently persisted stage."""
+
+    raw_posts: int
+    normalized_posts: int
+    complaints: int
 
 
 class SQLAlchemyStageStore:
@@ -139,6 +149,38 @@ class SQLAlchemyStageStore:
                 return record.id
         except IntegrityError:
             return self._existing_id(lookup)
+
+    def get_complaint(self, complaint_id: UUID) -> ComplaintSchema | None:
+        """Load and strictly validate one persisted complaint."""
+
+        with self._session_factory() as session:
+            result = session.scalar(
+                select(Complaint.result).where(Complaint.id == complaint_id)
+            )
+        if result is None:
+            return None
+        return ComplaintSchema.model_validate_json(json.dumps(result))
+
+    def count_stages(self) -> StageCounts:
+        """Return counts used by operational metrics."""
+
+        with self._session_factory() as session:
+            return StageCounts(
+                raw_posts=session.scalar(select(func.count()).select_from(RawPost))
+                or 0,
+                normalized_posts=session.scalar(
+                    select(func.count()).select_from(NormalizedPost)
+                )
+                or 0,
+                complaints=session.scalar(select(func.count()).select_from(Complaint))
+                or 0,
+            )
+
+    def check_health(self) -> None:
+        """Raise if the database cannot execute a trivial query."""
+
+        with self._session_factory() as session:
+            session.execute(select(1))
 
     def _existing_id(self, lookup: Select[tuple[UUID]]) -> UUID:
         with self._session_factory() as session:
