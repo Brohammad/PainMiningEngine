@@ -24,7 +24,7 @@ def configure_logging(settings: Settings) -> None:
                 "class": "logging.StreamHandler",
                 "formatter": "standard",
                 "level": settings.log_level,
-                "stream": "ext://sys.stdout",
+                "stream": "ext://sys.stderr",
             },
         },
         "root": {

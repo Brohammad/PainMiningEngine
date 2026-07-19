@@ -20,6 +20,7 @@ The current implementation provides:
 - Instructor-backed extraction into the complaint contract
 - direct synchronous collector → normalizer → extractor → validator orchestration
 - insert-only SQLAlchemy persistence for every pipeline stage
+- Typer commands for stage-by-stage JSON workflows
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
 - standard-library logging configuration
@@ -261,6 +262,39 @@ pipeline = SynchronousPipeline(
 The pipeline persists raw and normalized stages before extraction. If a later
 stage fails, earlier completed stages remain committed and can be processed
 again. No API, UI, queue, or worker is included.
+
+## Command-line interface
+
+Install the project, then run `signalmine --help`. Every command accepts
+`--input`, `--output`, and `--verbose`. Use `--output -` (the default) for JSON
+on stdout. `normalize` and `extract` also accept `--input -` for JSON on stdin.
+Verbose diagnostics are written to stderr so stdout remains valid JSON.
+
+| Command | Input | Execution |
+|---------|-------|-----------|
+| `fetch` | Reddit URL | Collector only → RawReddit JSON |
+| `normalize` | RawReddit JSON path or stdin | Normalizer only → NormalizedDocument JSON |
+| `extract` | NormalizedDocument JSON path or stdin | Extractor only → Complaint JSON |
+| `process` | Reddit URL | One synchronous `process_url` pipeline invocation → Complaint JSON |
+
+Examples:
+
+```bash
+signalmine fetch \
+  --input https://www.reddit.com/r/example/comments/id/title/ \
+  --output raw.json
+
+signalmine normalize --input raw.json --output normalized.json
+signalmine extract --input normalized.json --output complaint.json --verbose
+
+signalmine process \
+  --input https://www.reddit.com/r/example/comments/id/title/ \
+  --output -
+```
+
+The CLI composes existing application boundaries and adds no FastAPI server,
+frontend, worker, or asynchronous execution. The `process` command does not
+inject persistence; stage storage remains an explicit application choice.
 
 ## Development
 
