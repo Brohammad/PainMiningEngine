@@ -10,7 +10,6 @@ from uuid import UUID
 import instructor
 from instructor.core.exceptions import InstructorRetryException
 from jsonschema import Draft202012Validator, FormatChecker
-from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.protocols import Validator
 from openai import OpenAI
 from pydantic import ValidationError as PydanticValidationError
@@ -18,21 +17,19 @@ from pydantic import ValidationError as PydanticValidationError
 from backend.app.extractor.models import (
     Complaint,
     ComplaintCandidate,
-    EvidenceField,
     ExtractionMeta,
-    Provenance,
 )
 from backend.app.extractor.prompt import ExtractionPrompt
 from backend.app.extractor.settings import ExtractionSettings
 from backend.app.normalizer import NormalizedPost
+from backend.app.validator.complaint import (
+    ComplaintValidationError,
+    ComplaintValidator,
+)
 
 
 class ExtractionValidationError(ValueError):
     """Raised when all response validation attempts fail."""
-
-
-class _ProvenanceValidationError(ValueError):
-    """Internal response error for a provenance span that cannot be resolved."""
 
 
 class _Completions(Protocol):
@@ -43,6 +40,7 @@ class _Completions(Protocol):
         response_model: type[ComplaintCandidate],
         messages: list[dict[str, str]],
         max_retries: int,
+        temperature: float,
     ) -> object: ...
 
 
@@ -77,10 +75,7 @@ class ExtractionEngine:
             self._load_schema(schema_path / "normalized_document.json"),
             format_checker=format_checker,
         )
-        self._extraction_validator: Validator = Draft202012Validator(
-            self._load_schema(schema_path / "extraction.json"),
-            format_checker=format_checker,
-        )
+        self._complaint_validator = ComplaintValidator(schema_path)
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
 
     def extract(self, normalized: NormalizedPost) -> Complaint:
@@ -100,17 +95,15 @@ class ExtractionEngine:
                     response_model=ComplaintCandidate,
                     messages=messages,
                     max_retries=0,
+                    temperature=0.0,
                 )
                 candidate = ComplaintCandidate.model_validate(raw_candidate)
-                self._validate_provenance(candidate, normalized)
                 complaint = self._complete_complaint(candidate, normalized)
-                self._extraction_validator.validate(complaint.model_dump(mode="json"))
-                return complaint
+                return self._complaint_validator.validate(complaint, normalized)
             except (
                 InstructorRetryException,
                 PydanticValidationError,
-                JsonSchemaValidationError,
-                _ProvenanceValidationError,
+                ComplaintValidationError,
             ) as exc:
                 last_error = exc
 
@@ -139,61 +132,6 @@ class ExtractionEngine:
                 "meta": meta,
             }
         )
-
-    @staticmethod
-    def _validate_provenance(
-        candidate: ComplaintCandidate,
-        normalized: NormalizedPost,
-    ) -> None:
-        comments = {
-            str(comment["id"]): str(comment["body"])
-            for comment in cast(list[dict[str, Any]], normalized["comments"])
-        }
-        evidence_groups = [
-            candidate.pain_summary.evidence,
-            candidate.workflow.evidence,
-            candidate.workaround.evidence,
-            candidate.buyer.evidence,
-            candidate.budget_owner.evidence,
-            candidate.time_cost.evidence,
-            candidate.industry.evidence,
-            *[tool.evidence for tool in candidate.existing_tools],
-        ]
-
-        for evidence in (
-            item for evidence_group in evidence_groups for item in evidence_group
-        ):
-            ExtractionEngine._validate_evidence_span(
-                evidence,
-                normalized,
-                comments,
-            )
-
-    @staticmethod
-    def _validate_evidence_span(
-        evidence: Provenance,
-        normalized: NormalizedPost,
-        comments: dict[str, str],
-    ) -> None:
-        if evidence.source.value != normalized["platform"]:
-            raise _ProvenanceValidationError(
-                "evidence source does not match normalized platform"
-            )
-
-        if evidence.field is EvidenceField.TITLE:
-            source_text = str(normalized["title"])
-        elif evidence.field is EvidenceField.BODY:
-            source_text = str(normalized["content"])
-        else:
-            if evidence.comment_id not in comments:
-                raise _ProvenanceValidationError("evidence comment_id does not exist")
-            source_text = comments[evidence.comment_id]
-
-        start, end = evidence.character_range
-        if end > len(source_text):
-            raise _ProvenanceValidationError(
-                "evidence character_range exceeds source text"
-            )
 
     @staticmethod
     def _build_client(settings: ExtractionSettings) -> InstructorClient:

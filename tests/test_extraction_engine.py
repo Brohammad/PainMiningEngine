@@ -169,6 +169,7 @@ def test_extract_returns_pydantic_and_json_schema_valid_complaint() -> None:
     call = client.completions.calls[0]
     assert call["response_model"] is ComplaintCandidate
     assert call["max_retries"] == 0
+    assert call["temperature"] == 0.0
     assert call["messages"][0]["content"] == PROMPT_PATH.read_text(encoding="utf-8")
     assert "Certificate rotation is painful" in call["messages"][1]["content"]
     assert "[comment id=comment1" in call["messages"][1]["content"]

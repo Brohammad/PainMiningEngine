@@ -17,6 +17,7 @@ The current implementation provides:
 - PRAW-backed Reddit collection into the Phase 0 raw schema
 - deterministic RawReddit-to-NormalizedDocument conversion
 - Instructor-backed extraction into the complaint contract
+- direct synchronous collector → normalizer → extractor → validator orchestration
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
 - standard-library logging configuration
@@ -32,13 +33,13 @@ clustering, opportunity scoring, workers, or frontend.
 | `backend.app.collector` | PRAW-backed acquisition of Reddit posts, subreddit listings, and search results mapped directly to the raw Reddit contract. |
 | `backend.app.normalizer` | Deterministic conversion of RawReddit captures into the canonical NormalizedDocument contract. |
 | `backend.app.extractor` | Instructor-backed extraction of validated complaints with span-level provenance from normalized documents. |
-| `backend.app.validator` | Boundary for JSON contract validation and provenance span checks before persistence. |
+| `backend.app.validator` | Final Pydantic, JSON Schema, and provenance validation for complaints. |
 | `backend.app.storage` | Persistence boundary for raw, normalized, and versioned extraction artifacts. No database models exist yet. |
 | `backend.app.schemas` | Future Python representations of the JSON contracts in the repository-level `schemas/` directory. |
 | `backend.app.models` | Persistence-independent domain model boundary. |
 | `backend.app.config` | Settings, logging setup, and the explicit dependency container. |
 | `backend.app.utils` | Shared side-effect-free helpers that do not belong to a domain package. |
-| `backend.app.pipeline` | Future synchronous orchestration boundary for collector → normalizer → extractor → validator → storage. |
+| `backend.app.pipeline` | Direct synchronous orchestration from collection through final validation, returning a Complaint. |
 
 Dependencies should point inward through explicit constructor or function
 arguments. Entry points will own composition and pass an
@@ -163,6 +164,44 @@ complaint = engine.extract(normalized)
 
 The engine does not create embeddings, clusters, opportunity scores, or
 database records.
+
+## Synchronous pipeline
+
+`SynchronousPipeline` executes each stage directly in a fixed order:
+
+```text
+Collector → Normalizer → Extractor → Validator → Complaint
+```
+
+`process_url(url)` collects a Reddit URL and runs the complete flow.
+`process_post(post)` accepts an already-collected RawReddit object and starts at
+normalization. Both methods block until they return the final validated
+`Complaint`; they do not enqueue work, mutate the input, cache results, or
+write to storage.
+
+```python
+from backend.app.collector import RedditCollector, RedditSettings
+from backend.app.extractor import ExtractionEngine, ExtractionSettings
+from backend.app.normalizer import RedditNormalizer
+from backend.app.pipeline import SynchronousPipeline
+from backend.app.validator import ComplaintValidator
+
+pipeline = SynchronousPipeline(
+    collector=RedditCollector(RedditSettings()),
+    normalizer=RedditNormalizer(),
+    extractor=ExtractionEngine(ExtractionSettings()),
+    validator=ComplaintValidator(),
+)
+
+complaint = pipeline.process_url(
+    "https://www.reddit.com/r/example/comments/id/title/"
+)
+```
+
+The pipeline has no database, HTTP API, workers, queues, or asynchronous
+orchestration. Components are injected explicitly; given the same component
+outputs, orchestration returns the same complaint. Extraction requests use
+temperature zero.
 
 ## Development
 
