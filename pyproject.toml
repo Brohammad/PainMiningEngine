@@ -9,6 +9,8 @@ description = "Evidence-backed market intelligence from internet discussions."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "jsonschema>=4.26.0",
+    "markdown-it-py>=4.2.0",
     "praw>=8.0.2",
     "pydantic-settings>=2.0",
 ]
@@ -17,14 +19,17 @@ dependencies = [
 dev = [
     "black>=24.0",
     "build>=1.2",
-    "jsonschema>=4.26.0",
     "mypy>=1.10",
     "pytest>=9.1.1",
     "ruff>=0.5",
+    "types-jsonschema>=4.26.0.20260518",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"schemas" = "backend/app/schemas/contracts"
 
 [tool.black]
 line-length = 88

@@ -3,7 +3,7 @@
 SignalMine turns unstructured internet discussions into structured,
 evidence-backed market intelligence. The current repository contains the
 approved Phase 0 contracts, the Python backend skeleton, and the Reddit
-collector. It does not normalize, extract, validate, or persist data yet.
+collector and normalizer. It does not extract or persist data yet.
 
 The product definition and constraints are authoritative in
 [`docs/`](docs/). The canonical data contracts are the JSON Schemas in
@@ -15,20 +15,21 @@ The current implementation provides:
 
 - Python package boundaries for the synchronous V1 pipeline
 - PRAW-backed Reddit collection into the Phase 0 raw schema
+- deterministic RawReddit-to-NormalizedDocument conversion
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
 - standard-library logging configuration
 - Ruff, Black, and Mypy configuration
 
-It deliberately contains no normalization, LLM calls, database models, FastAPI
-endpoints, workers, or frontend.
+It deliberately contains no LLM calls, database models, FastAPI endpoints,
+workers, or frontend.
 
 ## Backend package responsibilities
 
 | Package | Responsibility |
 |---------|----------------|
 | `backend.app.collector` | PRAW-backed acquisition of Reddit posts, subreddit listings, and search results mapped directly to the raw Reddit contract. |
-| `backend.app.normalizer` | Boundary for deterministic conversion of raw payloads into the canonical normalized document contract. |
+| `backend.app.normalizer` | Deterministic conversion of RawReddit captures into the canonical NormalizedDocument contract. |
 | `backend.app.extractor` | Boundary for producing structured market-intelligence candidates from normalized documents. |
 | `backend.app.validator` | Boundary for JSON contract validation and provenance span checks before persistence. |
 | `backend.app.storage` | Persistence boundary for raw, normalized, and versioned extraction artifacts. No database models exist yet. |
@@ -94,6 +95,33 @@ capture = collector.fetch_post("https://www.reddit.com/r/example/comments/id/tit
 `fetch_subreddit(subreddit, limit)` and
 `fetch_search(query, subreddit, limit)` return lists of the same raw capture
 shape. The collector performs no normalization, extraction, or persistence.
+
+## Reddit normalizer
+
+`RedditNormalizer.normalize(raw)` accepts one object matching
+[`schemas/raw_reddit.json`](schemas/raw_reddit.json) and returns one object
+matching
+[`schemas/normalized_document.json`](schemas/normalized_document.json).
+
+The transformation:
+
+- removes Markdown syntax while retaining its textual content
+- collapses whitespace deterministically
+- converts source timestamps to UTC ISO 8601
+- flattens nested comment replies in traversal order
+- keeps the first occurrence of each comment ID
+- stores exact original title, body, and every comment body under
+  `metadata.original_text`
+
+The normalizer validates both input and output against the repository
+contracts. It performs no AI inference, enrichment, extraction, or
+persistence.
+
+```python
+from backend.app.normalizer import RedditNormalizer
+
+normalized = RedditNormalizer().normalize(raw_capture)
+```
 
 ## Development
 
