@@ -3,7 +3,7 @@
 SignalMine turns unstructured internet discussions into structured,
 evidence-backed market intelligence. The current repository contains the
 approved Phase 0 contracts, the Python backend skeleton, and the Reddit
-collector and normalizer. It does not extract or persist data yet.
+collector, normalizer, and extraction engine. It does not persist data yet.
 
 The product definition and constraints are authoritative in
 [`docs/`](docs/). The canonical data contracts are the JSON Schemas in
@@ -16,13 +16,14 @@ The current implementation provides:
 - Python package boundaries for the synchronous V1 pipeline
 - PRAW-backed Reddit collection into the Phase 0 raw schema
 - deterministic RawReddit-to-NormalizedDocument conversion
+- Instructor-backed extraction into the complaint contract
 - typed settings through `pydantic-settings`
 - explicit dependency injection without module-level service instances
 - standard-library logging configuration
 - Ruff, Black, and Mypy configuration
 
-It deliberately contains no LLM calls, database models, FastAPI endpoints,
-workers, or frontend.
+It deliberately contains no database models, FastAPI endpoints, embeddings,
+clustering, opportunity scoring, workers, or frontend.
 
 ## Backend package responsibilities
 
@@ -30,7 +31,7 @@ workers, or frontend.
 |---------|----------------|
 | `backend.app.collector` | PRAW-backed acquisition of Reddit posts, subreddit listings, and search results mapped directly to the raw Reddit contract. |
 | `backend.app.normalizer` | Deterministic conversion of RawReddit captures into the canonical NormalizedDocument contract. |
-| `backend.app.extractor` | Boundary for producing structured market-intelligence candidates from normalized documents. |
+| `backend.app.extractor` | Instructor-backed extraction of validated complaints with span-level provenance from normalized documents. |
 | `backend.app.validator` | Boundary for JSON contract validation and provenance span checks before persistence. |
 | `backend.app.storage` | Persistence boundary for raw, normalized, and versioned extraction artifacts. No database models exist yet. |
 | `backend.app.schemas` | Future Python representations of the JSON contracts in the repository-level `schemas/` directory. |
@@ -122,6 +123,46 @@ from backend.app.normalizer import RedditNormalizer
 
 normalized = RedditNormalizer().normalize(raw_capture)
 ```
+
+## Extraction engine
+
+`ExtractionEngine.extract(normalized)` accepts a schema-valid normalized post
+and returns a strict Pydantic `Complaint` matching
+[`schemas/extraction.json`](schemas/extraction.json).
+
+All model instructions and message templates are loaded from
+[`prompts/extract_v1.md`](prompts/extract_v1.md). Prompt text is not embedded
+in Python. The engine asks Instructor for model-owned extraction fields, adds
+host-owned metadata, then validates the complete response with both Pydantic
+and JSON Schema. Evidence ranges are checked against the referenced normalized
+title, body, or comment.
+
+OpenAI and OpenAI-compatible providers use:
+
+| Environment variable | Required / default |
+|----------------------|--------------------|
+| `EXTRACTION_API_KEY` | Required |
+| `EXTRACTION_MODEL` | Required |
+| `EXTRACTION_BASE_URL` | OpenAI default when unset |
+| `EXTRACTION_INSTRUCTOR_MODE` | `tools`; also supports `json`, `json_schema` |
+| `EXTRACTION_TIMEOUT_SECONDS` | `60` |
+| `EXTRACTION_VALIDATION_RETRIES` | `2` |
+
+The OpenAI client has transport retries disabled. The engine retries only
+response-validation failures and returns no partially repaired output.
+
+```python
+from backend.app.extractor import (
+    ExtractionEngine,
+    ExtractionSettings,
+)
+
+engine = ExtractionEngine(ExtractionSettings())
+complaint = engine.extract(normalized)
+```
+
+The engine does not create embeddings, clusters, opportunity scores, or
+database records.
 
 ## Development
 

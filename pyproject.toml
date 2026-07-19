@@ -9,9 +9,12 @@ description = "Evidence-backed market intelligence from internet discussions."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "instructor>=1.15.4",
     "jsonschema>=4.26.0",
     "markdown-it-py>=4.2.0",
+    "openai>=2.46.0",
     "praw>=8.0.2",
+    "pydantic>=2.13.4",
     "pydantic-settings>=2.0",
 ]
 
@@ -30,6 +33,7 @@ packages = ["backend"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "schemas" = "backend/app/schemas/contracts"
+"prompts" = "backend/app/extractor/prompt_contracts"
 
 [tool.black]
 line-length = 88
