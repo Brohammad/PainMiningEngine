@@ -1,0 +1,26 @@
+[
+  {
+    "name": "GPT-4.1-mini",
+    "model": "gpt-4.1-mini",
+    "provider": "openai"
+  },
+  {
+    "name": "GPT-5-mini",
+    "model": "gpt-5-mini",
+    "provider": "openai"
+  },
+  {
+    "name": "Claude",
+    "model": "claude-sonnet-4-20250514",
+    "provider": "anthropic",
+    "base_url": "https://api.anthropic.com/v1",
+    "api_key_env": "ANTHROPIC_API_KEY"
+  },
+  {
+    "name": "Gemini",
+    "model": "gemini-2.0-flash",
+    "provider": "google",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "api_key_env": "GEMINI_API_KEY"
+  }
+]

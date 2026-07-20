@@ -10,6 +10,7 @@ from backend.app.api.services import (
     ComplaintQueryService,
     HealthService,
     MetricsService,
+    ProcessingHistoryService,
     ProcessingService,
 )
 from backend.app.collector import RedditCollector, RedditSettings
@@ -23,7 +24,8 @@ from backend.app.config import (
 from backend.app.extractor import ExtractionEngine, ExtractionSettings
 from backend.app.normalizer import RedditNormalizer
 from backend.app.observability import ObservabilitySettings, Telemetry
-from backend.app.pipeline import SynchronousPipeline
+from backend.app.pipeline import PipelineTracer, SynchronousPipeline
+from backend.app.source_identity import RedditDiscussionIdentityResolver
 from backend.app.storage import SQLAlchemyStageStore
 from backend.app.validator import ComplaintValidator
 
@@ -36,6 +38,7 @@ class ApiContainer:
 
     processing: ProcessingService
     complaints: ComplaintQueryService
+    processing_history: ProcessingHistoryService
     health: HealthService
     metrics: MetricsService
     telemetry: Telemetry
@@ -46,6 +49,7 @@ def build_container() -> ApiContainer:
 
     configure_logging(_environment_settings(Settings))
     telemetry = Telemetry(_environment_settings(ObservabilitySettings))
+    tracer = PipelineTracer(telemetry)
     database_settings = _environment_settings(DatabaseSettings)
     engine = create_database_engine(database_settings)
     telemetry.instrument_engine(engine)
@@ -62,11 +66,13 @@ def build_container() -> ApiContainer:
         ),
         validator=ComplaintValidator(telemetry=telemetry),
         storage=store,
-        telemetry=telemetry,
+        telemetry=tracer,
+        identity_resolver=RedditDiscussionIdentityResolver(),
     )
     return ApiContainer(
-        processing=ProcessingService(pipeline, store),
+        processing=ProcessingService(pipeline, store, tracer),
         complaints=ComplaintQueryService(store),
+        processing_history=ProcessingHistoryService(store),
         health=HealthService(store),
         metrics=MetricsService(store, telemetry),
         telemetry=telemetry,
@@ -94,6 +100,12 @@ def get_complaint_service(request: Request) -> ComplaintQueryService:
     """Provide complaint reads to a route."""
 
     return get_container(request).complaints
+
+
+def get_processing_history_service(request: Request) -> ProcessingHistoryService:
+    """Provide processing history reads to a route."""
+
+    return get_container(request).processing_history
 
 
 def get_health_service(request: Request) -> HealthService:

@@ -35,6 +35,8 @@
       "required": [
         "model",
         "prompt_version",
+        "provider",
+        "temperature",
         "source_id",
         "document_id",
         "extracted_at"
@@ -49,6 +51,17 @@
           "type": "string",
           "minLength": 1,
           "description": "Stable prompt id, e.g. extract_v1."
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Inference provider identifier, e.g. openai."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature used for the extraction request."
         },
         "source_id": {
           "type": "string",

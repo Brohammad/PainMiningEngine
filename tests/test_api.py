@@ -10,9 +10,12 @@ from backend.app.api.services import (
     ComplaintQueryService,
     HealthService,
     MetricsService,
+    ProcessingHistoryService,
     ProcessingService,
 )
+from backend.app.pipeline.result import PipelineResult
 from backend.app.observability import ObservabilitySettings, Telemetry
+from backend.app.pipeline.trace import PipelineTracer
 from backend.app.schemas import (
     Complaint,
     ExtractionMeta,
@@ -39,6 +42,8 @@ def make_complaint() -> Complaint:
         meta=ExtractionMeta(
             model="test-model",
             prompt_version="extract_v1",
+            provider="openai",
+            temperature=0.0,
             source_id="t3_test",
             document_id=DOCUMENT_ID,
             extracted_at=datetime(2026, 7, 19, 12, 30, tzinfo=UTC),
@@ -51,14 +56,15 @@ class StaticPipeline:
         self.complaint = complaint
         self.urls: list[str] = []
 
-    def process_url(self, url: str) -> Complaint:
+    def process_url(self, url: str) -> PipelineResult:
         self.urls.append(url)
-        return self.complaint
+        return PipelineResult(complaint=self.complaint)
 
 
 class MemoryStore:
     def __init__(self) -> None:
         self.complaints: dict[UUID, Complaint] = {}
+        self.processing_runs: dict[UUID, object] = {}
         self.health_checks = 0
 
     def save_complaint(
@@ -79,15 +85,16 @@ class MemoryStore:
     def check_health(self) -> None:
         self.health_checks += 1
 
-
 def make_client() -> tuple[TestClient, StaticPipeline, MemoryStore, Telemetry]:
     complaint = make_complaint()
     pipeline = StaticPipeline(complaint)
     store = MemoryStore()
     telemetry = Telemetry(ObservabilitySettings(service_name="signalmine-tests"))
+    tracer = PipelineTracer(telemetry)
     container = ApiContainer(
-        processing=ProcessingService(pipeline, store),
+        processing=ProcessingService(pipeline, store, tracer),
         complaints=ComplaintQueryService(store),
+        processing_history=ProcessingHistoryService(store),
         health=HealthService(store),
         metrics=MetricsService(store, telemetry),
         telemetry=telemetry,
@@ -106,6 +113,10 @@ def test_process_uses_injected_pipeline_and_returns_persisted_id() -> None:
     assert response.status_code == 200
     assert response.json()["id"] == str(COMPLAINT_ID)
     assert response.json()["complaint"]["meta"]["document_id"] == str(DOCUMENT_ID)
+    assert response.json()["trace"]["status"] == "success"
+    assert response.json()["trace"]["stages"] == []
+    assert response.json()["duplicate"] is False
+    assert response.json()["status"] == "completed"
     assert pipeline.urls == ["https://www.reddit.com/r/devops/comments/test/"]
 
 

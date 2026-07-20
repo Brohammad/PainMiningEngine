@@ -2,7 +2,7 @@
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -13,8 +13,10 @@ from jsonschema.protocols import Validator
 from pydantic import BaseModel
 
 from backend.app.evaluation.dataset import GoldenCase, GoldenDataset
+from backend.app.evaluation.telemetry import EvaluationTelemetry
 from backend.app.extractor import ExtractionValidationError
 from backend.app.normalizer import NormalizedPost
+from backend.app.observability import TelemetryRecorder
 
 TEXT_FIELDS = (
     "pain_summary",
@@ -31,6 +33,17 @@ class Extractor(Protocol):
     """Extraction dependency required by the evaluation runner."""
 
     def extract(self, normalized: NormalizedPost) -> object: ...
+
+
+class Pipeline(Protocol):
+    """Pipeline dependency required by the golden evaluation runner."""
+
+    def process_post(self, post: dict[str, Any]) -> object: ...
+
+    def process_normalized(self, normalized: NormalizedPost) -> object: ...
+
+
+PipelineFactory = Callable[[TelemetryRecorder], Pipeline]
 
 
 @dataclass(slots=True)
@@ -68,7 +81,13 @@ class CaseEvaluation:
     json_valid: bool
     missing_values: tuple[str, ...]
     hallucinated_values: tuple[str, ...]
+    latency_seconds: float = 0.0
+    retry_count: int = 0
     error: str | None = None
+
+    @property
+    def unexpected_fields(self) -> tuple[str, ...]:
+        return self.hallucinated_values
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +136,20 @@ class EvaluationResult:
     @property
     def hallucinated_values(self) -> int:
         return sum(item.hallucinated_values for item in self.fields.values())
+
+    @property
+    def unexpected_fields(self) -> int:
+        return self.hallucinated_values
+
+    @property
+    def retry_count(self) -> int:
+        return sum(case.retry_count for case in self.cases)
+
+    @property
+    def average_latency(self) -> float:
+        if not self.cases:
+            return 0.0
+        return sum(case.latency_seconds for case in self.cases) / len(self.cases)
 
 
 class EvaluationRunner:
@@ -386,3 +419,73 @@ class EvaluationRunner:
         if repository_schemas.is_dir():
             return repository_schemas
         return Path(__file__).resolve().parents[1] / "schemas" / "contracts"
+
+
+class PipelineEvaluationRunner:
+    """Run the synchronous pipeline over golden cases and compare outputs."""
+
+    def __init__(
+        self,
+        pipeline_factory: PipelineFactory,
+        *,
+        schema_directory: Path | None = None,
+    ) -> None:
+        self._pipeline_factory = pipeline_factory
+        self._scorer = EvaluationRunner(
+            _UnusedExtractor(),
+            schema_directory=schema_directory,
+        )
+
+    def run(self, dataset: GoldenDataset) -> EvaluationResult:
+        """Evaluate every case through the full pipeline."""
+
+        fields = {name: FieldMetrics() for name in EVALUATED_FIELDS}
+        case_results = [
+            self._evaluate_pipeline_case(case, fields) for case in dataset
+        ]
+        return EvaluationResult(tuple(case_results), fields)
+
+    def _evaluate_pipeline_case(
+        self,
+        case: GoldenCase,
+        fields: dict[str, FieldMetrics],
+    ) -> CaseEvaluation:
+        telemetry = EvaluationTelemetry()
+        pipeline = self._pipeline_factory(telemetry)
+        try:
+            if case.raw is not None:
+                extracted = pipeline.process_post(case.raw).complaint
+            else:
+                extracted = pipeline.process_normalized(case.normalized).complaint
+            prediction = EvaluationRunner._json_payload(extracted)
+            self._scorer._validator.validate(prediction)
+        except (
+            ExtractionValidationError,
+            JsonSchemaValidationError,
+            TypeError,
+        ) as exc:
+            missing = self._scorer._score_invalid_case(case, fields)
+            return CaseEvaluation(
+                case_id=case.case_id,
+                json_valid=False,
+                missing_values=tuple(missing),
+                hallucinated_values=(),
+                latency_seconds=telemetry.latency_seconds,
+                retry_count=telemetry.retry_count,
+                error=str(exc),
+            )
+
+        missing, hallucinated = self._scorer._score_case(case, prediction, fields)
+        return CaseEvaluation(
+            case_id=case.case_id,
+            json_valid=True,
+            missing_values=tuple(missing),
+            hallucinated_values=tuple(hallucinated),
+            latency_seconds=telemetry.latency_seconds,
+            retry_count=telemetry.retry_count,
+        )
+
+
+class _UnusedExtractor:
+    def extract(self, normalized: NormalizedPost) -> object:
+        raise RuntimeError("extractor must not be used by PipelineEvaluationRunner")

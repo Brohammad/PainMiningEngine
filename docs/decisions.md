@@ -52,6 +52,19 @@ Every non-null extracted claim carries **span-level provenance**, not free-float
 
 Rationale: trust is the product. Traceability enables review, debugging, and later model improvement.
 
+## Source-agnostic pipeline (V1 refactor)
+
+**RawDiscussion + SourceCollector**
+
+- All collectors implement `SourceCollector.fetch() -> RawDiscussion`.
+- The synchronous pipeline imports no Reddit-specific modules; Reddit identity resolution is injected via `DiscussionIdentityResolver` at the API/CLI composition root.
+- `raw_sources.payload` stores `RawDiscussion`; legacy Reddit JSON files are coerced at ingest.
+- Duplicate detection exposes `platform_id` instead of `reddit_id` in API types; DB still uses `(platform, external_id)`.
+
+Rationale: multiple discussion sources (Reddit today, GitHub/HN later) share one pipeline without schema churn. Source-specific fields live in `metadata`.
+
+See [MIGRATION.md](../MIGRATION.md) for the full change log.
+
 ## Deferred (explicit non-goals for Phase 0 / week-1 milestone)
 
 - Embeddings / pgvector
@@ -59,6 +72,6 @@ Rationale: trust is the product. Traceability enables review, debugging, and lat
 - Opportunity-analysis LLM over clusters
 - Dashboard / search UI
 - Auth, billing, multi-tenant
-- GitHub Issues / Hacker News ingest (schema leaves room; code does not)
+- GitHub Issues / Hacker News ingest (schema and `SourceCollector` interface are ready; collectors not implemented)
 - Celery / Temporal (sync CLI first)
 

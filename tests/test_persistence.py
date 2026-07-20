@@ -19,12 +19,14 @@ from backend.app.extractor import (
     TextField,
     TriStateField,
 )
+from backend.app.collector.discussion import coerce_to_discussion
 from backend.app.normalizer import RedditNormalizer
 from backend.app.pipeline import SynchronousPipeline
 from backend.app.storage import (
     Base,
     Complaint,
     NormalizedPost,
+    ProcessingRun,
     RawPost,
     SQLAlchemyStageStore,
 )
@@ -32,7 +34,7 @@ from backend.app.storage import (
 ROOT = Path(__file__).parents[1]
 
 
-def make_raw_capture() -> dict[str, Any]:
+def make_legacy_reddit_capture() -> dict[str, Any]:
     return {
         "fetched_at": "2024-07-19T10:00:00+00:00",
         "source": {
@@ -67,6 +69,10 @@ def make_raw_capture() -> dict[str, Any]:
     }
 
 
+def make_raw_capture() -> dict[str, Any]:
+    return coerce_to_discussion(make_legacy_reddit_capture())
+
+
 def make_complaint(
     document_id: UUID,
     *,
@@ -85,6 +91,8 @@ def make_complaint(
         meta=ExtractionMeta(
             model="test-model",
             prompt_version="extract_v1",
+            provider="openai",
+            temperature=0.0,
             source_id="t3_post1",
             document_id=document_id,
             extracted_at=extracted_at or datetime(2026, 7, 19, 12, 30, tzinfo=UTC),
@@ -128,7 +136,7 @@ def test_stage_store_is_idempotent_and_never_overwrites(
     assert store.save_raw(raw) == raw_id
 
     changed_raw = deepcopy(raw)
-    changed_raw["post"]["selftext"] = "This must not overwrite the first capture."
+    changed_raw["body"] = "This must not overwrite the first capture."
     assert store.save_raw(changed_raw) == raw_id
 
     normalized_id = store.save_normalized(normalized, raw_id)
@@ -156,7 +164,7 @@ def test_stage_store_is_idempotent_and_never_overwrites(
         stored_raw = session.get(RawPost, raw_id)
         assert stored_raw is not None
         assert (
-            stored_raw.payload["post"]["selftext"]
+            stored_raw.payload["body"]
             == "Manual certificate rotation takes hours."
         )
 
@@ -192,7 +200,7 @@ class StaticValidator:
 
 
 class UnusedCollector:
-    def fetch_post(self, _url: str) -> dict[str, Any]:
+    def fetch(self, _url: str) -> dict[str, Any]:
         raise AssertionError("collector should not run for process_post")
 
 
@@ -212,7 +220,7 @@ def test_pipeline_persists_all_stages_idempotently(tmp_path: Path) -> None:
     first = pipeline.process_post(raw)
     second = pipeline.process_post(raw)
 
-    assert first == second == complaint
+    assert first.complaint == second.complaint == complaint
     assert stage_counts(factory) == (1, 1, 1)
 
 
@@ -257,5 +265,6 @@ def test_alembic_upgrade_creates_all_stage_tables(
         "raw_sources",
         "normalized_documents",
         "extractions",
+        "processing_runs",
         "alembic_version",
     } <= table_names

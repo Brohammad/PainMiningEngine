@@ -18,6 +18,9 @@ class ExtractionSettings(BaseSettings):
 
     api_key: SecretStr
     model: str = Field(min_length=1)
+    provider: str = Field(default="openai", min_length=1)
+    prompt_version: str = Field(default="extract_v1", min_length=1)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     base_url: str | None = None
     instructor_mode: Literal["tools", "json", "json_schema"] = "tools"
     timeout_seconds: float = Field(default=60.0, gt=0)

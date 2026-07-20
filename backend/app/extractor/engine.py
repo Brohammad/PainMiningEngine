@@ -22,7 +22,9 @@ from backend.app.extractor.models import (
     ExtractionMeta,
 )
 from backend.app.extractor.prompt import ExtractionPrompt
+from backend.app.extractor.prompt_registry import PromptRegistry
 from backend.app.extractor.settings import ExtractionSettings
+from backend.app.extractor.usage import TokenUsage, extract_token_usage
 from backend.app.normalizer import NormalizedPost
 from backend.app.observability import NoOpTelemetry, TelemetryRecorder
 from backend.app.validator.complaint import (
@@ -66,13 +68,19 @@ class ExtractionEngine:
         client: InstructorClient | None = None,
         *,
         prompt_path: Path | None = None,
+        prompt_registry: PromptRegistry | None = None,
         schema_directory: Path | None = None,
         clock: Callable[[], datetime] | None = None,
         telemetry: TelemetryRecorder | None = None,
+        usage_records: list[TokenUsage] | None = None,
     ) -> None:
         self._settings = settings
         self._client = client if client is not None else self._build_client(settings)
-        self._prompt = ExtractionPrompt.load(prompt_path or self._default_prompt_path())
+        if prompt_path is not None:
+            self._prompt = ExtractionPrompt.load(prompt_path)
+        else:
+            registry = prompt_registry or PromptRegistry.default()
+            self._prompt = registry.get(settings.prompt_version)
         schema_path = schema_directory or self._default_schema_directory()
         format_checker = FormatChecker()
         self._normalized_validator: Validator = Draft202012Validator(
@@ -85,6 +93,7 @@ class ExtractionEngine:
             telemetry=self._telemetry,
         )
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
+        self._usage_records = usage_records
 
     def extract(self, normalized: NormalizedPost) -> Complaint:
         """Extract one complaint, retrying response validation failures only."""
@@ -108,8 +117,12 @@ class ExtractionEngine:
                     response_model=ComplaintCandidate,
                     messages=messages,
                     max_retries=0,
-                    temperature=0.0,
+                    temperature=self._settings.temperature,
                 )
+                if self._usage_records is not None:
+                    usage = extract_token_usage(raw_candidate)
+                    if usage is not None:
+                        self._usage_records.append(usage)
                 candidate = ComplaintCandidate.model_validate(raw_candidate)
                 complaint = self._complete_complaint(candidate, normalized)
                 validated = self._complaint_validator.validate(
@@ -161,6 +174,8 @@ class ExtractionEngine:
         meta = ExtractionMeta(
             model=self._settings.model,
             prompt_version=self._prompt.version,
+            provider=self._settings.provider,
+            temperature=self._settings.temperature,
             source_id=str(normalized["external_id"]),
             document_id=UUID(str(normalized["id"])),
             extracted_at=timestamp.astimezone(UTC),
@@ -196,15 +211,6 @@ class ExtractionEngine:
     @staticmethod
     def _load_schema(path: Path) -> dict[str, Any]:
         return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
-
-    @staticmethod
-    def _default_prompt_path() -> Path:
-        repository_prompt = (
-            Path(__file__).resolve().parents[3] / "prompts" / "extract_v1.md"
-        )
-        if repository_prompt.is_file():
-            return repository_prompt
-        return Path(__file__).resolve().parent / "prompt_contracts" / "extract_v1.md"
 
     @staticmethod
     def _default_schema_directory() -> Path:

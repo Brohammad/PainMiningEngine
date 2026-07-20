@@ -22,6 +22,7 @@ from backend.app.extractor import (
     TriStateField,
 )
 from backend.app.extractor.engine import InstructorClient
+from backend.app.extractor.prompt_registry import PromptRegistry
 from backend.app.observability import (
     ObservabilitySettings,
     Telemetry,
@@ -30,6 +31,7 @@ from backend.app.observability import (
 
 ROOT = Path(__file__).parents[1]
 PROMPT_PATH = ROOT / "prompts" / "extract_v1.md"
+PROMPT_V2_PATH = ROOT / "prompts" / "extract_v2.md"
 EXTRACTION_SCHEMA = json.loads(
     (ROOT / "schemas" / "extraction.json").read_text(encoding="utf-8")
 )
@@ -151,10 +153,12 @@ def make_engine(
     *,
     settings: ExtractionSettings | None = None,
     telemetry: TelemetryRecorder | None = None,
+    prompt_path: Path | None = None,
 ) -> ExtractionEngine:
     return ExtractionEngine(
         settings or make_settings(),
         client=cast(InstructorClient, client),
+        prompt_path=prompt_path,
         clock=lambda: FIXED_TIME,
         telemetry=telemetry,
     )
@@ -170,6 +174,8 @@ def test_extract_returns_pydantic_and_json_schema_valid_complaint() -> None:
     EXTRACTION_VALIDATOR.validate(payload)
     assert complaint.meta.model == "compatible-model"
     assert complaint.meta.prompt_version == "extract_v1"
+    assert complaint.meta.provider == "openai"
+    assert complaint.meta.temperature == 0.0
     assert complaint.meta.source_id == "t3_post1"
     assert complaint.existing_tools[0].evidence[0].character_range == [33, 40]
 
@@ -180,6 +186,26 @@ def test_extract_returns_pydantic_and_json_schema_valid_complaint() -> None:
     assert call["messages"][0]["content"] == PROMPT_PATH.read_text(encoding="utf-8")
     assert "Certificate rotation is painful" in call["messages"][1]["content"]
     assert "[comment id=comment1" in call["messages"][1]["content"]
+
+
+def test_extract_uses_prompt_version_from_settings_without_code_changes() -> None:
+    client = FakeInstructorClient([make_candidate()])
+    engine = ExtractionEngine(
+        make_settings(prompt_version="extract_v2", temperature=0.2, provider="openai"),
+        client=cast(InstructorClient, client),
+        prompt_registry=PromptRegistry(ROOT / "prompts"),
+        clock=lambda: FIXED_TIME,
+    )
+
+    complaint = engine.extract(make_normalized())
+
+    assert complaint.meta.prompt_version == "extract_v2"
+    assert complaint.meta.temperature == 0.2
+    assert complaint.meta.provider == "openai"
+    assert client.completions.calls[0]["temperature"] == 0.2
+    assert client.completions.calls[0]["messages"][0]["content"] == (
+        PROMPT_V2_PATH.read_text(encoding="utf-8")
+    )
 
 
 def test_extract_retries_only_invalid_responses() -> None:
@@ -251,6 +277,9 @@ def test_extraction_settings_support_openai_compatible_environment(
         "https://compatible.example.test/v1",
     )
     monkeypatch.setenv("EXTRACTION_INSTRUCTOR_MODE", "json")
+    monkeypatch.setenv("EXTRACTION_PROMPT_VERSION", "extract_v2")
+    monkeypatch.setenv("EXTRACTION_PROVIDER", "compatible-provider")
+    monkeypatch.setenv("EXTRACTION_TEMPERATURE", "0.25")
 
     settings = ExtractionSettings(_env_file=None)
 
@@ -258,3 +287,6 @@ def test_extraction_settings_support_openai_compatible_environment(
     assert settings.model == "custom/model"
     assert settings.base_url == "https://compatible.example.test/v1"
     assert settings.instructor_mode == "json"
+    assert settings.prompt_version == "extract_v2"
+    assert settings.provider == "compatible-provider"
+    assert settings.temperature == 0.25

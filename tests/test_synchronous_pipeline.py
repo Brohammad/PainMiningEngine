@@ -16,8 +16,9 @@ from backend.app.extractor import (
     TriStateField,
 )
 from backend.app.observability import ObservabilitySettings, Telemetry
-from backend.app.pipeline import SynchronousPipeline
+from backend.app.pipeline import PipelineResult, SynchronousPipeline
 from backend.app.validator import ComplaintValidationError, ComplaintValidator
+from tests.test_persistence import make_raw_capture
 
 
 def make_normalized() -> dict[str, Any]:
@@ -68,6 +69,8 @@ def make_complaint(*, evidence_end: int | None = None) -> Complaint:
         meta=ExtractionMeta(
             model="test-model",
             prompt_version="extract_v1",
+            provider="openai",
+            temperature=0.0,
             source_id="t3_post1",
             document_id=UUID("bb58d485-5c9e-5aff-aed7-5fdc86b4a77a"),
             extracted_at=datetime(2026, 7, 19, 12, 30, tzinfo=UTC),
@@ -81,7 +84,7 @@ class FakeCollector:
         self.events = events
         self.urls: list[str] = []
 
-    def fetch_post(self, url: str) -> dict[str, Any]:
+    def fetch(self, url: str) -> dict[str, Any]:
         self.events.append("collector")
         self.urls.append(url)
         return self.raw
@@ -135,7 +138,7 @@ def make_pipeline() -> tuple[
     list[str],
 ]:
     events: list[str] = []
-    raw = {"raw": "post"}
+    raw = make_raw_capture()
     normalized = make_normalized()
     complaint = make_complaint()
     collector = FakeCollector(raw, events)
@@ -155,9 +158,9 @@ def test_process_url_runs_every_stage_in_order_and_returns_complaint() -> None:
     pipeline, collector, normalizer, extractor, validator, events = make_pipeline()
     url = "https://www.reddit.com/r/devops/comments/post1/"
 
-    complaint = pipeline.process_url(url)
+    result = pipeline.process_url(url)
 
-    assert complaint is extractor.complaint
+    assert result.complaint is extractor.complaint
     assert events == ["collector", "normalizer", "extractor", "validator"]
     assert collector.urls == [url]
     assert normalizer.inputs == [collector.raw]
@@ -167,12 +170,14 @@ def test_process_url_runs_every_stage_in_order_and_returns_complaint() -> None:
 
 def test_process_post_skips_collection_and_returns_deterministic_result() -> None:
     pipeline, collector, _normalizer, extractor, _validator, events = make_pipeline()
-    raw = {"raw": "already collected"}
+    raw = make_raw_capture()
+    raw = dict(raw)
+    raw["body"] = "already collected body"
 
     first = pipeline.process_post(raw)
     second = pipeline.process_post(raw)
 
-    assert first == second == extractor.complaint
+    assert first.complaint == second.complaint == extractor.complaint
     assert collector.urls == []
     assert events == [
         "normalizer",

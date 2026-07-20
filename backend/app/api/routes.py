@@ -10,30 +10,47 @@ from backend.app.api.dependencies import (
     get_health_service,
     get_metrics_service,
     get_processing_service,
+    get_processing_history_service,
 )
 from backend.app.api.schemas import (
     ComplaintResponse,
     HealthResponse,
     ProcessRequest,
+    ProcessResponse,
+    ProcessingRunResponse,
 )
 from backend.app.api.services import (
     ComplaintQueryService,
     HealthService,
     MetricsService,
+    ProcessingHistoryService,
     ProcessingService,
 )
 
 router = APIRouter()
 
 
-@router.post("/process", response_model=ComplaintResponse)
+@router.post("/process", response_model=ProcessResponse)
 def process(
     payload: ProcessRequest,
     service: Annotated[ProcessingService, Depends(get_processing_service)],
-) -> ComplaintResponse:
+) -> ProcessResponse:
     """Process and persist one Reddit post."""
 
     return service.process(str(payload.url))
+
+
+@router.get("/processing-runs/{run_id}", response_model=ProcessingRunResponse)
+def get_processing_run(
+    run_id: UUID,
+    service: Annotated[
+        ProcessingHistoryService,
+        Depends(get_processing_history_service),
+    ],
+) -> ProcessingRunResponse:
+    """Return one persisted processing history record."""
+
+    return service.get(run_id)
 
 
 @router.get("/complaints/{complaint_id}", response_model=ComplaintResponse)

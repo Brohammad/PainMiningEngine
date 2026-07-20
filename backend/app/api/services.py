@@ -7,14 +7,24 @@ from uuid import UUID
 from backend.app.api.schemas import (
     ComplaintResponse,
     HealthResponse,
+    ProcessResponse,
+    ProcessingRunResponse,
 )
+from backend.app.api.processing_history import to_processing_run_response
+from backend.app.api.trace import to_trace_response
 from backend.app.observability import Telemetry
+from backend.app.pipeline.result import PipelineResult
+from backend.app.pipeline.trace import PipelineTracer
 from backend.app.schemas import Complaint
 from backend.app.storage import StageCounts
 
 
 class ComplaintNotFoundError(LookupError):
     """Raised when a requested persisted complaint does not exist."""
+
+
+class ProcessingRunNotFoundError(LookupError):
+    """Raised when a requested processing history record does not exist."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +38,7 @@ class PrometheusMetrics:
 class Pipeline(Protocol):
     """Pipeline behavior required by processing."""
 
-    def process_url(self, url: str) -> Complaint: ...
+    def process_url(self, url: str) -> PipelineResult: ...
 
 
 class ComplaintStore(Protocol):
@@ -42,6 +52,8 @@ class ComplaintStore(Protocol):
 
     def get_complaint(self, complaint_id: UUID) -> Complaint | None: ...
 
+    def get_processing_run(self, run_id: UUID) -> object | None: ...
+
     def count_stages(self) -> StageCounts: ...
 
     def check_health(self) -> None: ...
@@ -50,19 +62,33 @@ class ComplaintStore(Protocol):
 class ProcessingService:
     """Process and identify one persisted complaint."""
 
-    def __init__(self, pipeline: Pipeline, store: ComplaintStore) -> None:
+    def __init__(
+        self,
+        pipeline: Pipeline,
+        store: ComplaintStore,
+        tracer: PipelineTracer,
+    ) -> None:
         self._pipeline = pipeline
         self._store = store
+        self._tracer = tracer
 
-    def process(self, url: str) -> ComplaintResponse:
+    def process(self, url: str) -> ProcessResponse:
         """Run the pipeline and return the idempotent extraction identifier."""
 
-        complaint = self._pipeline.process_url(url)
-        complaint_id = self._store.save_complaint(
-            complaint,
-            complaint.meta.document_id,
+        result = self._pipeline.process_url(url)
+        complaint_id = result.complaint_id or self._store.save_complaint(
+            result.complaint,
+            result.complaint.meta.document_id,
         )
-        return ComplaintResponse(id=complaint_id, complaint=complaint)
+        return ProcessResponse(
+            id=complaint_id,
+            complaint=result.complaint,
+            trace=to_trace_response(self._tracer.trace),
+            duplicate=result.duplicate,
+            duplicate_match=result.duplicate_match,
+            processing_run_id=result.processing_run_id,
+            status=result.status,
+        )
 
 
 class ComplaintQueryService:
@@ -78,6 +104,23 @@ class ComplaintQueryService:
         if complaint is None:
             raise ComplaintNotFoundError(str(complaint_id))
         return ComplaintResponse(id=complaint_id, complaint=complaint)
+
+
+class ProcessingHistoryService:
+    """Read persisted processing history."""
+
+    def __init__(self, store: ComplaintStore) -> None:
+        self._store = store
+
+    def get(self, run_id: UUID) -> ProcessingRunResponse:
+        """Return one processing run or raise a transport-independent miss."""
+
+        from backend.app.storage.models import ProcessingRun
+
+        run = self._store.get_processing_run(run_id)
+        if run is None or not isinstance(run, ProcessingRun):
+            raise ProcessingRunNotFoundError(str(run_id))
+        return to_processing_run_response(run)
 
 
 class HealthService:

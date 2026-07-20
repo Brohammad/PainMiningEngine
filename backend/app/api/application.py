@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.api.dependencies import ApiContainer, build_container
 from backend.app.api.middleware import ObservabilityMiddleware
 from backend.app.api.routes import router
-from backend.app.api.services import ComplaintNotFoundError
+from backend.app.api.services import ComplaintNotFoundError, ProcessingRunNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,17 @@ def create_app(container: ApiContainer | None = None) -> FastAPI:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"detail": f"complaint {error} not found"},
+        )
+
+    @app.exception_handler(ProcessingRunNotFoundError)
+    async def processing_run_not_found(
+        request: Request,
+        error: ProcessingRunNotFoundError,
+    ) -> JSONResponse:
+        del request
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": f"processing run {error} not found"},
         )
 
     @app.exception_handler(SQLAlchemyError)

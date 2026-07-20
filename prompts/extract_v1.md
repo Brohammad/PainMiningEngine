@@ -123,6 +123,8 @@ The application sets:
 
 - `meta.model`
 - `meta.prompt_version` = `extract_v1`
+- `meta.provider`
+- `meta.temperature`
 - `meta.source_id`
 - `meta.document_id`
 - `meta.extracted_at`

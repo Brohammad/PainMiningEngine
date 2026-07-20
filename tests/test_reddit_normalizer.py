@@ -25,76 +25,71 @@ def make_comment(
     author: str | None = "commenter",
     score: int = 1,
     depth: int | None = 0,
-    replies: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    comment: dict[str, Any] = {
+    return {
         "id": comment_id,
-        "name": f"t1_{comment_id}",
         "body": body,
         "author": author,
+        "created_at": "2024-07-19T09:46:40+00:00",
+        "updated_at": "2024-07-19T09:46:40+00:00",
         "score": score,
-        "created_utc": 1_721_380_000.0,
         "parent_id": "t3_post1",
-        "depth": depth,
-        "permalink": f"/r/devops/comments/post1/thread/{comment_id}/",
+        "depth": depth if depth is not None else 1,
+        "metadata": {
+            "name": f"t1_{comment_id}",
+            "permalink": f"/r/devops/comments/post1/thread/{comment_id}/",
+        },
     }
-    if replies is not None:
-        comment["replies"] = replies
-    return comment
 
 
 def make_raw_capture() -> dict[str, Any]:
+    first = make_comment(
+        "duplicate",
+        "**Use Terraform**\t now.",
+        score=10,
+        depth=0,
+    )
     nested = make_comment(
         "nested",
         "Try   `certbot`\n\nweekly.",
         author=None,
         score=4,
-        depth=None,
-    )
-    first = make_comment(
-        "duplicate",
-        "**Use Terraform**\t now.",
-        score=10,
-        replies=[nested],
+        depth=1,
     )
     duplicate = make_comment(
         "duplicate",
         "This duplicate must not replace the first.",
         score=2,
+        depth=0,
     )
     return {
         "fetched_at": "2024-07-19T15:30:00+05:30",
-        "source": {
-            "platform": "reddit",
-            "external_id": "t3_post1",
-            "permalink": "https://www.reddit.com/r/devops/comments/post1/",
+        "source": "reddit",
+        "discussion_id": "t3_post1",
+        "title": "# **Certificate** [rotation](https://example.com) failure",
+        "body": (
+            "Manual   rotation\n\n takes *hours*." "\n\n```sh\ncertbot renew\n```"
+        ),
+        "author": "operator",
+        "created_at": "2024-07-19T09:00:00+00:00",
+        "updated_at": "2024-07-19T09:00:00+00:00",
+        "url": "https://www.reddit.com/r/devops/comments/post1/",
+        "metadata": {
             "subreddit": "devops",
-            "api": "praw",
-        },
-        "post": {
-            "id": "post1",
-            "name": "t3_post1",
-            "title": "# **Certificate** [rotation](https://example.com) failure",
-            "selftext": (
-                "Manual   rotation\n\n takes *hours*." "\n\n```sh\ncertbot renew\n```"
-            ),
-            "author": "operator",
             "score": 42,
             "upvote_ratio": 0.95,
             "num_comments": 3,
-            "created_utc": 1_721_379_600.0,
-            "url": "https://example.com/source-link",
-            "permalink": "/r/devops/comments/post1/",
-            "subreddit": "devops",
             "link_flair_text": "Discussion",
             "over_18": False,
             "is_self": True,
+            "source_post_url": "https://example.com/source-link",
+            "api": "praw",
+            "fetch_meta": {
+                "comment_limit": 20,
+                "comment_sort": "top",
+            },
         },
-        "comments": [first, duplicate],
-        "fetch_meta": {
-            "comment_limit": 20,
-            "comment_sort": "top",
-        },
+        "comments": [first, nested, duplicate],
     }
 
 
@@ -119,8 +114,8 @@ def test_normalize_cleans_flattens_deduplicates_and_preserves_originals() -> Non
     assert normalized["comments"][1]["depth"] == 1
 
     originals = normalized["metadata"]["original_text"]
-    assert originals["title"] == raw["post"]["title"]
-    assert originals["content"] == raw["post"]["selftext"]
+    assert originals["title"] == raw["title"]
+    assert originals["content"] == raw["body"]
     assert originals["comments"] == [
         {"id": "duplicate", "body": "**Use Terraform**\t now."},
         {"id": "nested", "body": "Try   `certbot`\n\nweekly."},
@@ -143,7 +138,7 @@ def test_normalize_is_deterministic() -> None:
 
 def test_normalize_rejects_input_outside_raw_schema() -> None:
     raw = make_raw_capture()
-    del raw["post"]["title"]
+    del raw["title"]
 
     with pytest.raises(ValidationError):
         RedditNormalizer().normalize(raw)

@@ -23,10 +23,10 @@ from backend.app.observability import (
     TelemetryRecorder,
 )
 
-SCHEMA_PATH = Path(__file__).parents[1] / "schemas" / "raw_reddit.json"
-RAW_REDDIT_SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+SCHEMA_PATH = Path(__file__).parents[1] / "schemas" / "raw_discussion.json"
+RAW_DISCUSSION_SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 SCHEMA_VALIDATOR = Draft202012Validator(
-    RAW_REDDIT_SCHEMA,
+    RAW_DISCUSSION_SCHEMA,
     format_checker=FormatChecker(),
 )
 FIXED_TIME = datetime(2026, 7, 19, 10, 0, tzinfo=UTC)
@@ -205,9 +205,9 @@ def test_fetch_post_maps_deleted_and_removed_posts(marker: str) -> None:
     capture = collector.fetch_post(submission.url)
 
     assert_valid_capture(capture)
-    assert capture["post"]["selftext"] == marker
-    assert capture["post"]["author"] is None
-    assert capture["source"]["external_id"] == "t3_post1"
+    assert capture["body"] == marker
+    assert capture["author"] is None
+    assert capture["discussion_id"] == "t3_post1"
     assert [comment["id"] for comment in capture["comments"]] == ["high", "low"]
     assert capture["comments"][0]["author"] is None
     assert reddit.submission_urls == [submission.url]
@@ -222,7 +222,7 @@ def test_fetch_subreddit_maps_each_post_to_raw_schema() -> None:
 
     assert len(captures) == 2
     assert all(not list(SCHEMA_VALIDATOR.iter_errors(item)) for item in captures)
-    assert [item["post"]["id"] for item in captures] == ["first", "second"]
+    assert [item["discussion_id"] for item in captures] == ["t3_first", "t3_second"]
     assert reddit.subreddit_names == ["devops"]
     assert reddit.subreddit_object.hot_limits == [2]
 

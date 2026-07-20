@@ -10,6 +10,12 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.protocols import Validator
 
 from backend.app.normalizer import NormalizedPost, RedditNormalizer
+from backend.app.collector.discussion import (
+    coerce_to_discussion,
+    is_legacy_reddit_capture,
+    is_raw_discussion,
+)
+from backend.app.collector.types import RawDiscussion
 from backend.app.schemas import ComplaintCandidate
 
 
@@ -25,9 +31,10 @@ class Normalizer(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class GoldenCase:
-    """One normalized input and its human-authored expected extraction."""
+    """One pipeline input and its human-authored expected extraction."""
 
     case_id: str
+    raw: dict[str, Any] | None
     normalized: NormalizedPost
     gold: ComplaintCandidate
     acceptable_values: dict[str, tuple[str, ...]]
@@ -58,7 +65,7 @@ class GoldenDataset:
         normalizer: Normalizer | None = None,
         schema_directory: Path | None = None,
     ) -> "GoldenDataset":
-        """Load `<case>/gold.json` plus normalized or raw input fixtures."""
+        """Load ``input.json``/``expected.json`` or legacy fixture names."""
 
         if not directory.is_dir():
             raise GoldenDatasetError(
@@ -89,23 +96,58 @@ class GoldenDataset:
         normalizer: Normalizer,
         normalized_validator: Validator,
     ) -> GoldenCase:
+        expected_path = directory / "expected.json"
         gold_path = directory / "gold.json"
-        if not gold_path.is_file():
-            raise GoldenDatasetError(f"missing gold.json for {directory.name}")
-
-        normalized_path = directory / "normalized.json"
-        if normalized_path.is_file():
-            normalized = cls._read_json(normalized_path)
+        if expected_path.is_file():
+            gold_file = expected_path
+        elif gold_path.is_file():
+            gold_file = gold_path
         else:
-            raw_path = directory / "raw.json"
-            if not raw_path.is_file():
-                raise GoldenDatasetError(
-                    f"{directory.name} requires normalized.json or raw.json"
+            raise GoldenDatasetError(
+                f"missing expected.json or gold.json for {directory.name}"
+            )
+
+        raw: dict[str, Any] | None = None
+        normalized: dict[str, Any] | None = None
+        input_path = directory / "input.json"
+        normalized_path = directory / "normalized.json"
+        raw_path = directory / "raw.json"
+
+        if input_path.is_file():
+            payload = cls._read_json(input_path)
+            if cls._is_raw_discussion(payload) or cls._is_legacy_reddit(payload):
+                raw = payload
+                discussion = (
+                    coerce_to_discussion(payload)
+                    if cls._is_legacy_reddit(payload)
+                    else cast(RawDiscussion, payload)
                 )
-            normalized = normalizer.normalize(cls._read_json(raw_path))
+                normalized = normalizer.normalize(discussion)
+            else:
+                normalized = payload
+        elif normalized_path.is_file():
+            normalized = cls._read_json(normalized_path)
+        elif raw_path.is_file():
+            raw = cls._read_json(raw_path)
+        else:
+            raise GoldenDatasetError(
+                f"{directory.name} requires input.json, normalized.json, or raw.json"
+            )
+
+        if raw is not None and normalized is None:
+            discussion = (
+                coerce_to_discussion(raw)
+                if cls._is_legacy_reddit(raw)
+                else cast(RawDiscussion, raw)
+            )
+            normalized = normalizer.normalize(discussion)
+        if normalized is None:
+            raise GoldenDatasetError(
+                f"{directory.name} did not resolve normalized input"
+            )
 
         normalized_validator.validate(normalized)
-        gold_payload = cls._read_json(gold_path)
+        gold_payload = cls._read_json(gold_file)
         acceptable_values = cls._acceptable_values(
             gold_payload.pop("acceptable_values", {})
         )
@@ -113,14 +155,25 @@ class GoldenDataset:
         try:
             gold = ComplaintCandidate.model_validate_json(json.dumps(gold_payload))
         except ValueError as exc:
-            raise GoldenDatasetError(f"invalid gold.json for {directory.name}") from exc
+            raise GoldenDatasetError(
+                f"invalid expected extraction for {directory.name}"
+            ) from exc
 
         return GoldenCase(
             case_id=directory.name,
+            raw=raw,
             normalized=normalized,
             gold=gold,
             acceptable_values=acceptable_values,
         )
+
+    @staticmethod
+    def _is_raw_discussion(payload: dict[str, Any]) -> bool:
+        return is_raw_discussion(payload)
+
+    @staticmethod
+    def _is_legacy_reddit(payload: dict[str, Any]) -> bool:
+        return is_legacy_reddit_capture(payload)
 
     @staticmethod
     def _acceptable_values(value: object) -> dict[str, tuple[str, ...]]:

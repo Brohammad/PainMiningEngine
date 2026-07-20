@@ -1,6 +1,38 @@
 """Collector-specific failures exposed to callers."""
 
 
+class FileCollectorError(RuntimeError):
+    """Base error for local file collection failures."""
+
+
+class FileCollectorNotFoundError(FileCollectorError):
+    """Raised when the requested JSON file does not exist."""
+
+
+class FileCollectorInvalidJsonError(FileCollectorError):
+    """Raised when a file does not contain valid RawReddit JSON."""
+
+
+class FileCollectorSchemaError(FileCollectorError):
+    """Raised when JSON content violates the RawReddit schema."""
+
+
+class URLCollectorError(RuntimeError):
+    """Base error for URL HTML collection failures."""
+
+
+class URLCollectorNetworkError(URLCollectorError):
+    """Raised when Reddit HTML cannot be retrieved."""
+
+
+class URLCollectorParseError(URLCollectorError):
+    """Raised when required fields cannot be extracted from HTML."""
+
+
+class URLCollectorSchemaError(URLCollectorError):
+    """Raised when mapped capture violates the RawReddit schema."""
+
+
 class RedditCollectorError(RuntimeError):
     """Base error for Reddit collection failures."""
 

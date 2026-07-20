@@ -2,12 +2,12 @@
 
 ## Goal
 
-Sync pipeline that turns one Reddit thread into a persisted, schema-valid extraction.
+Sync pipeline that turns one online discussion into a persisted, schema-valid extraction.
 
 ```text
-Reddit API / JSON
+Source URL / JSON file
       ↓
-  ingest (raw)
+  collect (RawDiscussion)
       ↓
   normalize
       ↓
@@ -24,8 +24,8 @@ No dashboard, no workers cluster, no embeddings.
 
 ```mermaid
 flowchart LR
-  subgraph ingest [Ingest]
-    Reddit[Reddit fetch]
+  subgraph ingest [Collect]
+    Collector[SourceCollector]
     Raw[(raw_sources)]
   end
   subgraph normalize [Normalize]
@@ -38,7 +38,7 @@ flowchart LR
     Val[Schema validate]
     Ext[(extractions)]
   end
-  Reddit --> Raw
+  Collector --> Raw
   Raw --> Norm
   Norm --> Doc
   Doc --> Prompt
@@ -49,8 +49,8 @@ flowchart LR
 
 | Component | Responsibility | V1 interface |
 |-----------|----------------|--------------|
-| **Ingest** | Fetch post + top N comments; write `raw_sources` | CLI: `ingest-reddit --url` or `--id` |
-| **Normalize** | Map raw Reddit → `NormalizedDocument`; upsert `normalized_documents` | Pure function + persist step |
+| **Collect** | Fetch discussion via `SourceCollector.fetch()`; write `raw_sources` | CLI: `fetch`, `process`, `process-file` |
+| **Normalize** | Map `RawDiscussion` → `NormalizedDocument`; upsert `normalized_documents` | Pure function + persist step |
 | **Extract** | Call model with Instructor; fill `meta`; validate against `extraction.json` | CLI: `extract --document-id` |
 | **Persist** | SQLAlchemy models; Alembic migrations | Shared DB session |
 
@@ -61,7 +61,7 @@ flowchart LR
 | API surface | Thin FastAPI optional; **CLI is the milestone** | Prove pipeline before HTTP |
 | LLM access | LiteLLM + Instructor | Structured JSON, swappable models |
 | Workers | **None** (sync process) | Celery/Temporal after CLI is solid |
-| Sources | Reddit only | Other platforms share normalized schema later |
+| Sources | Reddit implemented (`RedditCollector`, `URLCollector`, `FileCollector`); schema is source-agnostic | GitHub/HN collectors implement `SourceCollector` later |
 | Comment window | Top N by score (default **N = 20**), depth capped (default **depth ≤ 3**) | Pain often in comments; bound token cost |
 
 ## Idempotency
@@ -79,7 +79,8 @@ No stage row is overwritten by the pipeline.
 
 | Stage | Schema |
 |-------|--------|
-| Raw Reddit payload | [`schemas/raw_reddit.json`](../schemas/raw_reddit.json) |
+| Raw discussion capture | [`schemas/raw_discussion.json`](../schemas/raw_discussion.json) |
+| Legacy Reddit envelope (adapter) | [`schemas/raw_reddit.json`](../schemas/raw_reddit.json) |
 | Normalized document | [`schemas/normalized_document.json`](../schemas/normalized_document.json) |
 | Extraction result | [`schemas/extraction.json`](../schemas/extraction.json) |
 | Prompt policy | [`prompts/extract_v1.md`](../prompts/extract_v1.md) |
@@ -94,7 +95,7 @@ Build a single text block for the model:
 2. Body (`content`)
 3. Comments in score order: `author | score | body` (truncated long bodies with a clear marker)
 
-Do not send raw Reddit API JSON to the model.
+Do not send raw provider JSON to the model.
 
 ## Failure modes
 

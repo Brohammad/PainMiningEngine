@@ -1,0 +1,57 @@
+{
+  "pain_summary": {
+    "value": "Manual certificate rotation takes hours.",
+    "evidence": [
+      {
+        "source": "reddit",
+        "field": "body",
+        "comment_id": null,
+        "character_range": [0, 52],
+        "confidence": 0.95
+      }
+    ]
+  },
+  "workflow": {
+    "value": null,
+    "evidence": []
+  },
+  "workaround": {
+    "value": null,
+    "evidence": []
+  },
+  "buyer": {
+    "value": null,
+    "evidence": []
+  },
+  "budget_owner": {
+    "value": "unknown",
+    "evidence": []
+  },
+  "time_cost": {
+    "value": null,
+    "evidence": []
+  },
+  "industry": {
+    "value": null,
+    "evidence": []
+  },
+  "existing_tools": [
+    {
+      "name": "certbot",
+      "evidence": [
+        {
+          "source": "reddit",
+          "field": "body",
+          "comment_id": null,
+          "character_range": [0, 52],
+          "confidence": 0.95
+        }
+      ]
+    }
+  ],
+  "acceptable_values": {
+    "pain_summary": [
+      "Certificate rotation takes hours manually."
+    ]
+  }
+}

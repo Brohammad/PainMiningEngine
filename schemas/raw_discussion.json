@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://signalmine.local/schemas/raw_discussion.json",
+  "title": "RawDiscussion",
+  "description": "Source-agnostic online discussion capture stored in raw_sources.payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fetched_at",
+    "source",
+    "discussion_id",
+    "title",
+    "body",
+    "comments",
+    "author",
+    "created_at",
+    "updated_at",
+    "url",
+    "metadata"
+  ],
+  "properties": {
+    "fetched_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp when this discussion was collected."
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Source platform identifier (reddit, github, hackernews, ...)."
+    },
+    "discussion_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier on the source platform."
+    },
+    "title": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string",
+      "description": "Primary discussion body text."
+    },
+    "comments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/comment" },
+      "default": []
+    },
+    "author": {
+      "type": ["string", "null"]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Source-specific fields (subreddit, score, repository, labels, ...)."
+    }
+  },
+  "$defs": {
+    "comment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "body", "author", "created_at", "updated_at", "score"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "body": { "type": "string" },
+        "author": { "type": ["string", "null"] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "score": { "type": "integer" },
+        "parent_id": { "type": ["string", "null"] },
+        "depth": { "type": "integer", "minimum": 0 },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

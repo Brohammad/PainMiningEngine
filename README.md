@@ -15,8 +15,8 @@ The product definition and constraints are authoritative in
 The current implementation provides:
 
 - Python package boundaries for the synchronous V1 pipeline
-- PRAW-backed Reddit collection into the Phase 0 raw schema
-- deterministic RawReddit-to-NormalizedDocument conversion
+- PRAW-backed Reddit collection into the source-agnostic `RawDiscussion` contract
+- deterministic RawDiscussion-to-NormalizedDocument conversion (Reddit mapping today)
 - Instructor-backed extraction into the complaint contract
 - direct synchronous collector → normalizer → extractor → validator orchestration
 - insert-only SQLAlchemy persistence for every pipeline stage
@@ -36,8 +36,8 @@ opportunity scoring, workers, or frontend.
 
 | Package | Responsibility |
 |---------|----------------|
-| `backend.app.collector` | PRAW-backed acquisition of Reddit posts, subreddit listings, and search results mapped directly to the raw Reddit contract. |
-| `backend.app.normalizer` | Deterministic conversion of RawReddit captures into the canonical NormalizedDocument contract. |
+| `backend.app.collector` | Source-agnostic `SourceCollector` interface; Reddit, file, and URL collectors return `RawDiscussion`. |
+| `backend.app.normalizer` | Deterministic conversion of `RawDiscussion` captures into the canonical NormalizedDocument contract. |
 | `backend.app.extractor` | Instructor-backed extraction of validated complaints with span-level provenance from normalized documents. |
 | `backend.app.validator` | Final Pydantic, JSON Schema, and provenance validation for complaints. |
 | `backend.app.storage` | Insert-only SQLAlchemy persistence for raw, normalized, and versioned extraction artifacts. |
@@ -71,13 +71,18 @@ Available skeleton settings:
 An optional local `.env` file is supported and ignored by Git. Importing the
 package does not read environment variables or configure logging.
 
-## Reddit collector
+## Collectors
 
-`RedditCollector` is read-only and returns dictionaries matching
-[`schemas/raw_reddit.json`](schemas/raw_reddit.json). It preserves `[deleted]`
-and `[removed]` body markers, maps absent authors to `null`, collects top
-comments within the configured depth, and retries transient network and
-rate-limit failures.
+All collectors implement `SourceCollector.fetch(target) -> RawDiscussion` and
+return dictionaries matching
+[`schemas/raw_discussion.json`](schemas/raw_discussion.json).
+
+`RedditCollector` is read-only and maps PRAW submissions to `RawDiscussion`. It
+preserves `[deleted]` and `[removed]` body markers, maps absent authors to
+`null`, collects top comments within the configured depth, and retries transient
+network and rate-limit failures. Legacy Reddit envelope JSON
+([`schemas/raw_reddit.json`](schemas/raw_reddit.json)) is still accepted by
+`FileCollector` and coerced automatically.
 
 PRAW credentials and collector behavior are loaded from environment variables:
 
@@ -100,17 +105,17 @@ explicitly:
 from backend.app.collector import RedditCollector, RedditSettings
 
 collector = RedditCollector(RedditSettings())
-capture = collector.fetch_post("https://www.reddit.com/r/example/comments/id/title/")
+capture = collector.fetch("https://www.reddit.com/r/example/comments/id/title/")
 ```
 
 `fetch_subreddit(subreddit, limit)` and
 `fetch_search(query, subreddit, limit)` return lists of the same raw capture
 shape. The collector performs no normalization, extraction, or persistence.
 
-## Reddit normalizer
+## Normalizer
 
-`RedditNormalizer.normalize(raw)` accepts one object matching
-[`schemas/raw_reddit.json`](schemas/raw_reddit.json) and returns one object
+`RedditNormalizer.normalize(discussion)` accepts one `RawDiscussion` (Reddit
+`source` with Reddit-specific fields in `metadata`) and returns one object
 matching
 [`schemas/normalized_document.json`](schemas/normalized_document.json).
 
@@ -183,7 +188,7 @@ Collector → Normalizer → Extractor → Validator → Complaint
 ```
 
 `process_url(url)` collects a Reddit URL and runs the complete flow.
-`process_post(post)` accepts an already-collected RawReddit object and starts at
+`process_discussion(discussion)` (alias: `process_post`) accepts an already-collected `RawDiscussion` and starts at
 normalization. Both methods block until they return the final validated
 `Complaint`; they do not enqueue work, mutate the input, or cache results.
 
@@ -218,7 +223,7 @@ three Phase 0 stages remain separate:
 
 | Python model | Table | Contents |
 |--------------|-------|----------|
-| `RawPost` | `raw_sources` | Original RawReddit payload |
+| `RawPost` | `raw_sources` | Original `RawDiscussion` payload |
 | `NormalizedPost` | `normalized_documents` | Canonical normalized fields |
 | `Complaint` | `extractions` | Versioned complaint result |
 
@@ -326,8 +331,8 @@ Verbose diagnostics are written to stderr so stdout remains valid JSON.
 
 | Command | Input | Execution |
 |---------|-------|-----------|
-| `fetch` | Reddit URL | Collector only → RawReddit JSON |
-| `normalize` | RawReddit JSON path or stdin | Normalizer only → NormalizedDocument JSON |
+| `fetch` | Source URL | Collector only → RawDiscussion JSON |
+| `normalize` | RawDiscussion JSON path or stdin | Normalizer only → NormalizedDocument JSON |
 | `extract` | NormalizedDocument JSON path or stdin | Extractor only → Complaint JSON |
 | `process` | Reddit URL | One synchronous `process_url` pipeline invocation → Complaint JSON |
 

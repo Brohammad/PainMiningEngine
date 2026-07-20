@@ -1,8 +1,8 @@
-"""Deterministic RawReddit-to-NormalizedDocument conversion."""
+"""Deterministic RawDiscussion-to-NormalizedDocument conversion for Reddit."""
 
 import json
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -13,18 +13,19 @@ from jsonschema.protocols import Validator
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-RawRedditCapture = Mapping[str, Any]
+from backend.app.collector.types import RawDiscussion
+
 NormalizedPost = dict[str, Any]
 
 
 class RedditNormalizer:
-    """Normalize raw Reddit captures without inference or side effects."""
+    """Normalize Reddit RawDiscussion captures without inference or side effects."""
 
     def __init__(self, schema_directory: Path | None = None) -> None:
         schema_path = schema_directory or self._default_schema_directory()
         format_checker = FormatChecker()
-        self._raw_validator: Validator = Draft202012Validator(
-            self._load_schema(schema_path / "raw_reddit.json"),
+        self._discussion_validator: Validator = Draft202012Validator(
+            self._load_schema(schema_path / "raw_discussion.json"),
             format_checker=format_checker,
         )
         self._normalized_validator: Validator = Draft202012Validator(
@@ -33,46 +34,45 @@ class RedditNormalizer:
         )
         self._markdown = MarkdownIt("commonmark", {"html": False})
 
-    def normalize(self, raw: RawRedditCapture) -> NormalizedPost:
+    def normalize(self, discussion: RawDiscussion) -> NormalizedPost:
         """Return one schema-valid normalized document."""
 
-        self._raw_validator.validate(raw)
-        source = cast(Mapping[str, Any], raw["source"])
-        post = cast(Mapping[str, Any], raw["post"])
-        raw_comments = cast(list[Mapping[str, Any]], raw.get("comments", []))
+        self._discussion_validator.validate(discussion)
+        metadata = cast(dict[str, Any], discussion.get("metadata", {}))
+        raw_comments = cast(list[Mapping[str, Any]], discussion.get("comments", []))
 
         comments, original_comments = self._normalize_comments(raw_comments)
-        platform = str(source["platform"])
-        external_id = str(source["external_id"])
+        platform = str(discussion["source"])
+        external_id = str(discussion["discussion_id"])
 
         normalized: NormalizedPost = {
             "id": str(uuid5(NAMESPACE_URL, f"{platform}:{external_id}")),
             "platform": platform,
             "external_id": external_id,
-            "url": str(source["permalink"]),
-            "title": self._clean_text(str(post["title"])),
-            "content": self._clean_text(str(post["selftext"])),
+            "url": str(discussion["url"]),
+            "title": self._clean_text(str(discussion["title"])),
+            "content": self._clean_text(str(discussion["body"])),
             "comments": comments,
-            "author": self._optional_string(post["author"]),
-            "score": int(post["score"]),
-            "created_at": self._epoch_timestamp(post["created_utc"]),
-            "fetched_at": self._date_timestamp(str(raw["fetched_at"])),
-            "community": str(source["subreddit"]),
+            "author": self._optional_string(discussion.get("author")),
+            "score": int(metadata.get("score", 0) or 0),
+            "created_at": self._date_timestamp(str(discussion["created_at"])),
+            "fetched_at": self._date_timestamp(str(discussion["fetched_at"])),
+            "community": self._optional_string(metadata.get("subreddit")),
             "metadata": {
                 "original_text": {
-                    "title": str(post["title"]),
-                    "content": str(post["selftext"]),
+                    "title": str(discussion["title"]),
+                    "content": str(discussion["body"]),
                     "comments": original_comments,
                 },
                 "source_post": {
-                    "url": str(post["url"]),
-                    "upvote_ratio": post.get("upvote_ratio"),
-                    "num_comments": post.get("num_comments"),
-                    "link_flair_text": post.get("link_flair_text"),
-                    "over_18": post.get("over_18"),
-                    "is_self": post.get("is_self"),
+                    "url": metadata.get("source_post_url"),
+                    "upvote_ratio": metadata.get("upvote_ratio"),
+                    "num_comments": metadata.get("num_comments"),
+                    "link_flair_text": metadata.get("link_flair_text"),
+                    "over_18": metadata.get("over_18"),
+                    "is_self": metadata.get("is_self"),
                 },
-                "fetch_meta": raw.get("fetch_meta", {}),
+                "fetch_meta": metadata.get("fetch_meta", {}),
             },
         }
         self._normalized_validator.validate(normalized)
@@ -86,7 +86,7 @@ class RedditNormalizer:
         originals: list[dict[str, str]] = []
         seen_ids: set[str] = set()
 
-        for comment, traversal_depth in self._walk_comments(comments):
+        for comment in comments:
             comment_id = str(comment["id"])
             originals.append(
                 {
@@ -98,35 +98,19 @@ class RedditNormalizer:
                 continue
 
             seen_ids.add(comment_id)
-            raw_depth = comment.get("depth")
-            depth = traversal_depth if raw_depth is None else int(raw_depth)
             normalized.append(
                 {
                     "id": comment_id,
                     "body": self._clean_text(str(comment["body"])),
-                    "author": self._optional_string(comment["author"]),
-                    "score": int(comment["score"]),
-                    "created_at": self._epoch_timestamp(comment["created_utc"]),
+                    "author": self._optional_string(comment.get("author")),
+                    "score": int(comment.get("score", 0) or 0),
+                    "created_at": self._date_timestamp(str(comment["created_at"])),
                     "parent_id": self._optional_string(comment.get("parent_id")),
-                    "depth": depth,
+                    "depth": int(comment.get("depth", 0) or 0),
                 }
             )
 
         return normalized, originals
-
-    def _walk_comments(
-        self,
-        comments: list[Mapping[str, Any]],
-        traversal_depth: int = 0,
-    ) -> Iterator[tuple[Mapping[str, Any], int]]:
-        for comment in comments:
-            yield comment, traversal_depth
-            replies = comment.get("replies")
-            if isinstance(replies, list):
-                yield from self._walk_comments(
-                    cast(list[Mapping[str, Any]], replies),
-                    traversal_depth + 1,
-                )
 
     def _clean_text(self, text: str) -> str:
         chunks: list[str] = []
@@ -152,10 +136,6 @@ class RedditNormalizer:
     @staticmethod
     def _normalize_whitespace(text: str) -> str:
         return re.sub(r"\s+", " ", text).strip()
-
-    @staticmethod
-    def _epoch_timestamp(value: Any) -> str:
-        return datetime.fromtimestamp(float(value), tz=UTC).isoformat()
 
     @staticmethod
     def _date_timestamp(value: str) -> str:

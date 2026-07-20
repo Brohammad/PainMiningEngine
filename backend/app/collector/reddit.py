@@ -1,4 +1,4 @@
-"""PRAW-backed collection mapped to the Phase 0 raw Reddit contract."""
+"""PRAW-backed Reddit collection mapped to RawDiscussion."""
 
 from collections.abc import Callable
 from contextlib import suppress
@@ -17,6 +17,10 @@ from prawcore.exceptions import (
     TooManyRequests,
 )
 
+from backend.app.collector.discussion import (
+    DiscussionSchemaValidator,
+    legacy_reddit_to_discussion,
+)
 from backend.app.collector.exceptions import (
     RedditCollectorError,
     RedditNetworkError,
@@ -24,9 +28,9 @@ from backend.app.collector.exceptions import (
     RedditResourceUnavailableError,
 )
 from backend.app.collector.settings import RedditSettings
+from backend.app.collector.types import LegacyRedditCapture, RawDiscussion
 from backend.app.observability import NoOpTelemetry, TelemetryRecorder
 
-RawRedditCapture = dict[str, Any]
 T = TypeVar("T")
 
 
@@ -41,33 +45,45 @@ class RedditCollector:
         sleeper: Callable[[float], None] = sleep,
         clock: Callable[[], datetime] | None = None,
         telemetry: TelemetryRecorder | None = None,
+        schema_directory: Any | None = None,
     ) -> None:
         self._settings = settings
         self._reddit = reddit if reddit is not None else self._build_client(settings)
         self._sleep = sleeper
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._telemetry = telemetry or NoOpTelemetry()
+        self._discussion_validator = DiscussionSchemaValidator(schema_directory)
 
-    def fetch_post(self, url: str) -> RawRedditCapture:
+    def fetch(self, target: str) -> RawDiscussion:
         """Fetch one Reddit submission by URL."""
 
-        if not url.strip():
-            raise ValueError("url must not be empty")
-        return self._execute(
-            lambda: self._map_submission(self._reddit.submission(url=url))
+        if not target.strip():
+            raise ValueError("target must not be empty")
+        return self._to_discussion(
+            self._execute(
+                lambda: self._map_legacy_capture(
+                    self._reddit.submission(url=target)
+                )
+            ),
+            context=target,
         )
+
+    def fetch_post(self, target: str) -> RawDiscussion:
+        """Backward-compatible alias for :meth:`fetch`."""
+
+        return self.fetch(target)
 
     def fetch_subreddit(
         self,
         subreddit: str,
         limit: int,
-    ) -> list[RawRedditCapture]:
+    ) -> list[RawDiscussion]:
         """Fetch hot submissions from a subreddit."""
 
         self._validate_listing_arguments(subreddit, limit)
         return self._execute(
             lambda: [
-                self._map_submission(submission)
+                self._to_discussion(self._map_legacy_capture(submission))
                 for submission in self._reddit.subreddit(subreddit).hot(limit=limit)
             ]
         )
@@ -77,7 +93,7 @@ class RedditCollector:
         query: str,
         subreddit: str,
         limit: int,
-    ) -> list[RawRedditCapture]:
+    ) -> list[RawDiscussion]:
         """Search a subreddit and fetch matching submissions."""
 
         if not query.strip():
@@ -85,7 +101,7 @@ class RedditCollector:
         self._validate_listing_arguments(subreddit, limit)
         return self._execute(
             lambda: [
-                self._map_submission(submission)
+                self._to_discussion(self._map_legacy_capture(submission))
                 for submission in self._reddit.subreddit(subreddit).search(
                     query,
                     sort="relevance",
@@ -93,6 +109,16 @@ class RedditCollector:
                 )
             ]
         )
+
+    def _to_discussion(
+        self,
+        capture: LegacyRedditCapture,
+        *,
+        context: str = "reddit capture",
+    ) -> RawDiscussion:
+        discussion = legacy_reddit_to_discussion(capture)
+        self._discussion_validator.validate(discussion, context=context)
+        return discussion
 
     @staticmethod
     def _build_client(settings: RedditSettings) -> praw.Reddit:
@@ -151,7 +177,7 @@ class RedditCollector:
 
         return float(min(max(delay, 0.0), configured_max))
 
-    def _map_submission(self, submission: Submission) -> RawRedditCapture:
+    def _map_legacy_capture(self, submission: Submission) -> LegacyRedditCapture:
         external_id = str(
             getattr(submission, "name", None) or f"t3_{str(submission.id)}"
         )
@@ -273,3 +299,7 @@ class RedditCollector:
             raise ValueError("subreddit must not be empty")
         if limit < 0:
             raise ValueError("limit must be non-negative")
+
+
+# Deprecated alias for legacy imports.
+RawRedditCapture = RawDiscussion

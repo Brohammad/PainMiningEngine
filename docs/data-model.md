@@ -58,7 +58,7 @@ Immutable capture of provider payloads.
 | `id` | `uuid` PK | Default `gen_random_uuid()` |
 | `platform` | `text` NOT NULL | V1: `reddit` |
 | `external_id` | `text` NOT NULL | Platform-stable id |
-| `payload` | `jsonb` NOT NULL | Must validate as [`schemas/raw_reddit.json`](../schemas/raw_reddit.json) when platform is reddit |
+| `payload` | `jsonb` NOT NULL | Must validate as [`schemas/raw_discussion.json`](../schemas/raw_discussion.json) |
 | `fetched_at` | `timestamptz` NOT NULL | When the API was called |
 | `created_at` | `timestamptz` NOT NULL | Row insert time |
 

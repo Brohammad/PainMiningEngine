@@ -113,6 +113,8 @@ class ExtractionMeta(StrictModel):
 
     model: Annotated[str, Field(min_length=1)]
     prompt_version: Annotated[str, Field(min_length=1)]
+    provider: Annotated[str, Field(min_length=1)]
+    temperature: Annotated[float, Field(ge=0.0, le=2.0)]
     source_id: str
     document_id: UUID
     extracted_at: datetime
