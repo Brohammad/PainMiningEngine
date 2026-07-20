@@ -10,11 +10,11 @@ class FileCollectorNotFoundError(FileCollectorError):
 
 
 class FileCollectorInvalidJsonError(FileCollectorError):
-    """Raised when a file does not contain valid RawReddit JSON."""
+    """Raised when a file does not contain valid discussion JSON."""
 
 
 class FileCollectorSchemaError(FileCollectorError):
-    """Raised when JSON content violates the RawReddit schema."""
+    """Raised when JSON content violates the RawDiscussion schema."""
 
 
 class URLCollectorError(RuntimeError):
@@ -30,7 +30,7 @@ class URLCollectorParseError(URLCollectorError):
 
 
 class URLCollectorSchemaError(URLCollectorError):
-    """Raised when mapped capture violates the RawReddit schema."""
+    """Raised when mapped capture violates the RawDiscussion schema."""
 
 
 class RedditCollectorError(RuntimeError):
@@ -47,3 +47,23 @@ class RedditRateLimitError(RedditCollectorError):
 
 class RedditResourceUnavailableError(RedditCollectorError):
     """Raised when Reddit does not expose a requested resource."""
+
+
+class GitHubCollectorError(RuntimeError):
+    """Base error for GitHub collection failures."""
+
+
+class GitHubNetworkError(GitHubCollectorError):
+    """Raised after transient GitHub network failures exhaust configured retries."""
+
+
+class GitHubRateLimitError(GitHubCollectorError):
+    """Raised after GitHub rate-limit responses exhaust configured retries."""
+
+
+class GitHubResourceUnavailableError(GitHubCollectorError):
+    """Raised when GitHub does not expose a requested resource."""
+
+
+class GitHubParseError(GitHubCollectorError):
+    """Raised when a GitHub URL cannot be parsed."""

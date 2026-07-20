@@ -10,6 +10,7 @@ from typing import Any, Mapping, cast
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 from jsonschema.protocols import Validator
 
+from backend.app.collector.sources import DiscussionSource
 from backend.app.collector.types import LegacyRedditCapture, RawDiscussion
 
 
@@ -74,7 +75,7 @@ def legacy_reddit_to_discussion(capture: LegacyRedditCapture) -> RawDiscussion:
     }
     return {
         "fetched_at": str(capture["fetched_at"]),
-        "source": str(source["platform"]),
+        "source": DiscussionSource.REDDIT.value,
         "discussion_id": str(source["external_id"]),
         "title": str(post.get("title", "")),
         "body": str(post.get("selftext", "")),

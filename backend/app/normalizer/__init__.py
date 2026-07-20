@@ -3,6 +3,8 @@
 from typing import Protocol
 
 from backend.app.collector.types import RawDiscussion
+from backend.app.normalizer.dispatch import DispatchingNormalizer
+from backend.app.normalizer.github import GitHubNormalizer
 from backend.app.normalizer.reddit import NormalizedPost, RedditNormalizer
 
 
@@ -14,6 +16,8 @@ class DiscussionNormalizer(Protocol):
 
 __all__ = [
     "DiscussionNormalizer",
+    "DispatchingNormalizer",
+    "GitHubNormalizer",
     "NormalizedPost",
     "RedditNormalizer",
 ]

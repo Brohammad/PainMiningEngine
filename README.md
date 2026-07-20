@@ -1,96 +1,129 @@
 # SignalMine
 
 SignalMine turns unstructured internet discussions into structured,
-evidence-backed market intelligence. The current repository contains the
-approved Phase 0 contracts, the Python backend skeleton, and the Reddit
-collector, normalizer, extraction engine, synchronous pipeline, and persistence
-layer, plus a dependency-injected REST API.
+evidence-backed market intelligence.
 
 The product definition and constraints are authoritative in
 [`docs/`](docs/). The canonical data contracts are the JSON Schemas in
 [`schemas/`](schemas/).
 
-## Current scope
+## Quick start
 
-The current implementation provides:
+Validate the core pipeline on a real GitHub issue:
 
-- Python package boundaries for the synchronous V1 pipeline
-- PRAW-backed Reddit collection into the source-agnostic `RawDiscussion` contract
-- deterministic RawDiscussion-to-NormalizedDocument conversion (Reddit mapping today)
-- Instructor-backed extraction into the complaint contract
-- direct synchronous collector → normalizer → extractor → validator orchestration
-- insert-only SQLAlchemy persistence for every pipeline stage
-- Typer commands for stage-by-stage JSON workflows
-- golden-dataset extraction metrics and Markdown reports
-- FastAPI endpoints for processing, complaint reads, health, and Prometheus
-  metrics
-- typed settings through `pydantic-settings`
-- explicit dependency injection without module-level service instances
-- JSON logging, request correlation, OpenTelemetry tracing, and bounded metrics
-- Ruff, Black, and Mypy configuration
+```bash
+git clone <repository-url>
+cd painminingengine
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+cp .env.example .env
+```
 
-It deliberately contains no authentication, embeddings, clustering,
-opportunity scoring, workers, or frontend.
+Set these in `.env`:
 
-## Backend package responsibilities
+| Variable | Required |
+|----------|----------|
+| `GITHUB_TOKEN` | Recommended (strongly) — avoids GitHub rate limits during testing |
+| `EXTRACTION_API_KEY` | Yes |
+| `EXTRACTION_MODEL` | Yes |
 
-| Package | Responsibility |
-|---------|----------------|
-| `backend.app.collector` | Source-agnostic `SourceCollector` interface; Reddit, file, and URL collectors return `RawDiscussion`. |
-| `backend.app.normalizer` | Deterministic conversion of `RawDiscussion` captures into the canonical NormalizedDocument contract. |
-| `backend.app.extractor` | Instructor-backed extraction of validated complaints with span-level provenance from normalized documents. |
-| `backend.app.validator` | Final Pydantic, JSON Schema, and provenance validation for complaints. |
-| `backend.app.storage` | Insert-only SQLAlchemy persistence for raw, normalized, and versioned extraction artifacts. |
-| `backend.app.schemas` | Future Python representations of the JSON contracts in the repository-level `schemas/` directory. |
-| `backend.app.models` | Persistence-independent domain model boundary. |
-| `backend.app.config` | Settings, logging setup, and the explicit dependency container. |
-| `backend.app.utils` | Shared side-effect-free helpers that do not belong to a domain package. |
-| `backend.app.pipeline` | Direct synchronous orchestration from collection through final validation, returning a Complaint. |
-| `backend.app.evaluation` | Golden dataset loading, extraction comparison, metrics, and Markdown reporting. |
-| `backend.app.api` | Thin FastAPI routes, transport schemas, application services, and the explicit API composition root. |
-| `backend.app.observability` | Structured logging, request context, OpenTelemetry traces, and application-owned Prometheus instruments. |
+Then run:
 
-Dependencies should point inward through explicit constructor or function
-arguments. Entry points will own composition and pass an
-`ApplicationDependencies` instance. Packages must not create global clients,
-database sessions, settings instances, or other service singletons.
+```bash
+signalmine sources
 
-## Configuration
+signalmine fetch https://github.com/kubernetes/kubernetes/issues/12345
 
-`backend.app.config.Settings` reads environment variables with the
-`SIGNALMINE_` prefix when instantiated by a future composition root.
+signalmine process https://github.com/kubernetes/kubernetes/issues/12345
+```
 
-Available skeleton settings:
+If `process` returns a structured Complaint JSON, the collector → normalizer →
+extractor → validator pipeline is working. Database, API server, and Reddit
+credentials can come later.
 
-| Environment variable | Default |
-|----------------------|---------|
-| `SIGNALMINE_APP_NAME` | `SignalMine` |
-| `SIGNALMINE_ENVIRONMENT` | `development` |
-| `SIGNALMINE_LOG_LEVEL` | `INFO` |
+## Sources
 
-An optional local `.env` file is supported and ignored by Git. Importing the
-package does not read environment variables or configure logging.
+`fetch` and `process` accept a URL and route to the correct collector
+automatically. No source-specific subcommands are required.
 
-## Collectors
+```bash
+signalmine fetch https://github.com/org/repo/issues/42
+signalmine process https://github.com/org/repo/issues/42
+```
+
+Check what is available in your environment:
+
+```bash
+signalmine sources
+```
+
+Example output:
+
+```text
+Available Sources
+
+✓ GitHub
+✓ File
+○ Reddit (not configured)
+○ Hacker News (planned)
+```
+
+| Source | Collection | Configuration |
+|--------|------------|---------------|
+| GitHub | REST API via `fetch` / `process` | `GITHUB_TOKEN` strongly recommended |
+| File | `process-file <path>` | None |
+| Reddit | `fetch` / `process` when configured | See optional section below |
+| Hacker News | Planned | — |
 
 All collectors implement `SourceCollector.fetch(target) -> RawDiscussion` and
 return dictionaries matching
 [`schemas/raw_discussion.json`](schemas/raw_discussion.json).
 
-`RedditCollector` is read-only and maps PRAW submissions to `RawDiscussion`. It
-preserves `[deleted]` and `[removed]` body markers, maps absent authors to
-`null`, collects top comments within the configured depth, and retries transient
-network and rate-limit failures. Legacy Reddit envelope JSON
-([`schemas/raw_reddit.json`](schemas/raw_reddit.json)) is still accepted by
-`FileCollector` and coerced automatically.
+### GitHub
 
-PRAW credentials and collector behavior are loaded from environment variables:
+`GitHubCollector` fetches public or token-authenticated GitHub issues via the
+REST API.
 
 | Environment variable | Required / default |
 |----------------------|--------------------|
-| `REDDIT_CLIENT_ID` | Required |
-| `REDDIT_CLIENT_SECRET` | Required |
-| `REDDIT_USER_AGENT` | Required |
+| `GITHUB_TOKEN` | Recommended (strongly) |
+| `GITHUB_USER_AGENT` | `signalmine-github-collector/1.0` |
+| `GITHUB_REQUEST_TIMEOUT_SECONDS` | `15` |
+| `GITHUB_COMMENT_LIMIT` | `50` |
+| `GITHUB_RETRY_ATTEMPTS` | `3` |
+| `GITHUB_RETRY_BACKOFF_SECONDS` | `1.0` |
+
+Unauthenticated GitHub API access works for public repositories but hits rate
+limits quickly. Set `GITHUB_TOKEN` before running repeated tests.
+
+## Current scope
+
+The current implementation provides:
+
+- source-agnostic `RawDiscussion` contract and `SourceCollector` interface
+- GitHub and Reddit collectors with URL-based routing
+- deterministic RawDiscussion-to-NormalizedDocument conversion
+- Instructor-backed extraction into the complaint contract
+- direct synchronous collector → normalizer → extractor → validator orchestration
+- insert-only SQLAlchemy persistence for every pipeline stage
+- Typer commands for stage-by-stage JSON workflows
+- golden-dataset extraction metrics and Markdown reports
+- FastAPI endpoints for processing, complaint reads, health, and Prometheus metrics
+
+It deliberately contains no authentication, embeddings, clustering,
+opportunity scoring, workers, or frontend.
+
+## Optional: Reddit source (requires Reddit API access)
+
+Reddit collection requires a Reddit API application. Until credentials are
+approved and configured, use GitHub as the default validation path.
+
+| Environment variable | Required / default |
+|----------------------|--------------------|
+| `REDDIT_CLIENT_ID` | Required for Reddit |
+| `REDDIT_CLIENT_SECRET` | Required for Reddit |
+| `REDDIT_USER_AGENT` | Required for Reddit |
 | `REDDIT_REQUEST_TIMEOUT_SECONDS` | `10` |
 | `REDDIT_RATE_LIMIT_WAIT_SECONDS` | `60` |
 | `REDDIT_RETRY_ATTEMPTS` | `3` |
@@ -98,46 +131,29 @@ PRAW credentials and collector behavior are loaded from environment variables:
 | `REDDIT_COMMENT_LIMIT` | `20` |
 | `REDDIT_COMMENT_MAX_DEPTH` | `3` |
 
-Copy `.env.example` to `.env` for local development. Construct dependencies
-explicitly:
+Create a script app at [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps),
+then add credentials to `.env`. Once configured, Reddit URLs work through the
+same commands:
 
-```python
-from backend.app.collector import RedditCollector, RedditSettings
-
-collector = RedditCollector(RedditSettings())
-capture = collector.fetch("https://www.reddit.com/r/example/comments/id/title/")
+```bash
+signalmine fetch https://www.reddit.com/r/devops/comments/abc123/title/
+signalmine process https://www.reddit.com/r/devops/comments/abc123/title/
 ```
 
-`fetch_subreddit(subreddit, limit)` and
-`fetch_search(query, subreddit, limit)` return lists of the same raw capture
-shape. The collector performs no normalization, extraction, or persistence.
+`RedditCollector` maps PRAW submissions to `RawDiscussion`. Legacy Reddit
+envelope JSON ([`schemas/raw_reddit.json`](schemas/raw_reddit.json)) is still
+accepted by `FileCollector` and coerced automatically.
 
 ## Normalizer
 
-`RedditNormalizer.normalize(discussion)` accepts one `RawDiscussion` (Reddit
-`source` with Reddit-specific fields in `metadata`) and returns one object
-matching
+`DispatchingNormalizer` routes `RawDiscussion` captures to the correct source
+normalizer and returns one object matching
 [`schemas/normalized_document.json`](schemas/normalized_document.json).
 
-The transformation:
-
-- removes Markdown syntax while retaining its textual content
-- collapses whitespace deterministically
-- converts source timestamps to UTC ISO 8601
-- flattens nested comment replies in traversal order
-- keeps the first occurrence of each comment ID
-- stores exact original title, body, and every comment body under
-  `metadata.original_text`
-
-The normalizer validates both input and output against the repository
-contracts. It performs no AI inference, enrichment, extraction, or
-persistence.
-
-```python
-from backend.app.normalizer import RedditNormalizer
-
-normalized = RedditNormalizer().normalize(raw_capture)
-```
+The transformation removes Markdown syntax, collapses whitespace
+deterministically, converts timestamps to UTC ISO 8601, and stores original text
+under `metadata.original_text`. No AI inference or persistence occurs in this
+stage.
 
 ## Extraction engine
 
@@ -145,255 +161,65 @@ normalized = RedditNormalizer().normalize(raw_capture)
 and returns a strict Pydantic `Complaint` matching
 [`schemas/extraction.json`](schemas/extraction.json).
 
-All model instructions and message templates are loaded from
-[`prompts/extract_v1.md`](prompts/extract_v1.md). Prompt text is not embedded
-in Python. The engine asks Instructor for model-owned extraction fields, adds
-host-owned metadata, then validates the complete response with both Pydantic
-and JSON Schema. Evidence ranges are checked against the referenced normalized
-title, body, or comment.
-
-OpenAI and OpenAI-compatible providers use:
-
 | Environment variable | Required / default |
 |----------------------|--------------------|
 | `EXTRACTION_API_KEY` | Required |
 | `EXTRACTION_MODEL` | Required |
+| `EXTRACTION_PROVIDER` | `openai` |
 | `EXTRACTION_BASE_URL` | OpenAI default when unset |
-| `EXTRACTION_INSTRUCTOR_MODE` | `tools`; also supports `json`, `json_schema` |
+| `EXTRACTION_PROMPT_VERSION` | `extract_v1` |
+| `EXTRACTION_TEMPERATURE` | `0` |
 | `EXTRACTION_TIMEOUT_SECONDS` | `60` |
 | `EXTRACTION_VALIDATION_RETRIES` | `2` |
 
-The OpenAI client has transport retries disabled. The engine retries only
-response-validation failures and returns no partially repaired output.
-
-```python
-from backend.app.extractor import (
-    ExtractionEngine,
-    ExtractionSettings,
-)
-
-engine = ExtractionEngine(ExtractionSettings())
-complaint = engine.extract(normalized)
-```
-
-The engine does not create embeddings, clusters, opportunity scores, or
-database records.
-
 ## Synchronous pipeline
-
-`SynchronousPipeline` executes each stage directly in a fixed order:
 
 ```text
 Collector → Normalizer → Extractor → Validator → Complaint
 ```
 
-`process_url(url)` collects a Reddit URL and runs the complete flow.
-`process_discussion(discussion)` (alias: `process_post`) accepts an already-collected `RawDiscussion` and starts at
-normalization. Both methods block until they return the final validated
-`Complaint`; they do not enqueue work, mutate the input, or cache results.
+`process <url>` runs the complete flow for GitHub or Reddit URLs. The CLI does
+not persist results unless storage is injected explicitly (the REST API does).
 
-```python
-from backend.app.collector import RedditCollector, RedditSettings
-from backend.app.extractor import ExtractionEngine, ExtractionSettings
-from backend.app.normalizer import RedditNormalizer
-from backend.app.pipeline import SynchronousPipeline
-from backend.app.validator import ComplaintValidator
+## Persistence and REST API
 
-pipeline = SynchronousPipeline(
-    collector=RedditCollector(RedditSettings()),
-    normalizer=RedditNormalizer(),
-    extractor=ExtractionEngine(ExtractionSettings()),
-    validator=ComplaintValidator(),
-)
-
-complaint = pipeline.process_url(
-    "https://www.reddit.com/r/example/comments/id/title/"
-)
-```
-
-The pipeline has no HTTP concerns, workers, queues, or asynchronous
-orchestration. Persistence is enabled only when storage is injected. Components
-are explicit; given the same component outputs, orchestration returns the same
-complaint. Extraction requests use temperature zero.
-
-## Persistence
-
-Persistence uses SQLAlchemy 2.x, Alembic, and PostgreSQL through psycopg. The
-three Phase 0 stages remain separate:
-
-| Python model | Table | Contents |
-|--------------|-------|----------|
-| `RawPost` | `raw_sources` | Original `RawDiscussion` payload |
-| `NormalizedPost` | `normalized_documents` | Canonical normalized fields |
-| `Complaint` | `extractions` | Versioned complaint result |
-
-`SQLAlchemyStageStore` exposes `save_raw`, `save_normalized`, and
-`save_complaint`. Each method owns and commits its own transaction. Inserts are
-idempotent: repeated natural keys or identical complaint results return the
-existing row ID. Existing rows are never updated. A different extraction
-result remains a new immutable version.
-
-Configure the database with:
-
-| Environment variable | Required / default |
-|----------------------|--------------------|
-| `DATABASE_URL` | Required; e.g. `postgresql+psycopg://...` |
-| `DATABASE_ECHO` | `false` |
-| `DATABASE_POOL_PRE_PING` | `true` |
-
-Run migrations:
+Persistence requires PostgreSQL, `DATABASE_URL`, and Alembic migrations. These
+are needed for the API server, not for the CLI quick start above.
 
 ```bash
-DATABASE_URL=postgresql+psycopg://... uv run alembic upgrade head
-```
-
-Inject persistence into the existing synchronous pipeline:
-
-```python
-from backend.app.config import (
-    DatabaseSettings,
-    create_database_engine,
-    create_session_factory,
-)
-from backend.app.storage import SQLAlchemyStageStore
-
-engine = create_database_engine(DatabaseSettings())
-store = SQLAlchemyStageStore(create_session_factory(engine))
-
-pipeline = SynchronousPipeline(
-    collector=RedditCollector(RedditSettings()),
-    normalizer=RedditNormalizer(),
-    extractor=ExtractionEngine(ExtractionSettings()),
-    validator=ComplaintValidator(),
-    storage=store,
-)
-```
-
-The pipeline persists raw and normalized stages before extraction. If a later
-stage fails, earlier completed stages remain committed and can be processed
-again. No UI, queue, or worker is included.
-
-## REST API
-
-Create the API through its factory so each application owns an explicit
-dependency container:
-
-```bash
+DATABASE_URL=postgresql+psycopg://... alembic upgrade head
 uv run uvicorn backend.app.api:create_app --factory
 ```
 
-The production composition root reads the existing `REDDIT_*`, `EXTRACTION_*`,
-and `DATABASE_*` environment variables. Apply Alembic migrations before
-starting the server.
-
 | Method | Path | Contract |
 |--------|------|----------|
-| `POST` | `/process` | Accepts `{"url": "https://..."}`; runs and persists the synchronous pipeline; returns the extraction ID and Complaint |
-| `GET` | `/complaints/{id}` | Returns a persisted extraction ID and Complaint, or `404` |
-| `GET` | `/health` | Checks database connectivity and returns `{"status": "ok"}` |
-| `GET` | `/metrics` | Returns Prometheus text exposition, including persisted stage gauges |
-
-Routes only translate HTTP inputs and outputs. Application services own
-orchestration, and storage owns database queries. Tests can inject an
-`ApiContainer` into `create_app`; importing the API creates no clients,
-settings, engines, or service singletons.
-
-## Production observability
-
-The production API emits one-line JSON logs to stderr. Every HTTP response has
-an `X-Request-ID`; a safe inbound value is propagated, otherwise the middleware
-generates one. Request IDs and active OpenTelemetry trace/span IDs are added to
-logs automatically. Logs and metric labels never include prompts, source text,
-API keys, full URLs, document IDs, or exception messages.
-
-OpenTelemetry traces cover FastAPI requests, SQLAlchemy calls, complete pipeline
-runs, and each pipeline stage. Set an OTLP/HTTP traces endpoint to export them:
-
-| Environment variable | Default |
-|----------------------|---------|
-| `OBSERVABILITY_SERVICE_NAME` | `signalmine` |
-| `OBSERVABILITY_SERVICE_VERSION` | `0.1.0` |
-| `OBSERVABILITY_OTLP_TRACES_ENDPOINT` | unset; e.g. `http://collector:4318/v1/traces` |
-| `OBSERVABILITY_TRACE_SAMPLE_RATIO` | `1.0` |
-| `OBSERVABILITY_REQUEST_ID_HEADER` | `X-Request-ID` |
-
-`GET /metrics` uses an application-owned Prometheus registry. It exposes bounded
-HTTP request counts and latency, pipeline run outcomes and stage timing,
-extraction latency, validation failures, retry counts and delay, and persisted
-stage gauges. No dashboard configuration is included.
+| `POST` | `/process` | `{"url": "https://..."}` → Complaint |
+| `GET` | `/complaints/{id}` | Persisted Complaint |
+| `GET` | `/health` | Database health |
+| `GET` | `/metrics` | Prometheus metrics |
 
 ## Command-line interface
 
-Install the project, then run `signalmine --help`. Every command accepts
-`--input`, `--output`, and `--verbose`. Use `--output -` (the default) for JSON
-on stdout. `normalize` and `extract` also accept `--input -` for JSON on stdin.
-Verbose diagnostics are written to stderr so stdout remains valid JSON.
+Install the project, then run `signalmine --help`.
 
 | Command | Input | Execution |
 |---------|-------|-----------|
-| `fetch` | Source URL | Collector only → RawDiscussion JSON |
-| `normalize` | RawDiscussion JSON path or stdin | Normalizer only → NormalizedDocument JSON |
-| `extract` | NormalizedDocument JSON path or stdin | Extractor only → Complaint JSON |
-| `process` | Reddit URL | One synchronous `process_url` pipeline invocation → Complaint JSON |
+| `sources` | — | List configured and planned sources |
+| `fetch` | URL (argument or `--input`) | Collector → RawDiscussion JSON |
+| `process` | URL (argument or `--input`) | Full pipeline → Complaint JSON |
+| `normalize` | RawDiscussion JSON | Normalizer only |
+| `extract` | NormalizedDocument JSON | Extractor only |
+| `process-file` | Local JSON path | Full pipeline from file |
+| `trace` | URL | Pipeline stage trace JSON |
 
 Examples:
 
 ```bash
-signalmine fetch \
-  --input https://www.reddit.com/r/example/comments/id/title/ \
-  --output raw.json
-
+signalmine fetch https://github.com/kubernetes/kubernetes/issues/12345
+signalmine process https://github.com/kubernetes/kubernetes/issues/12345 --output complaint.json
 signalmine normalize --input raw.json --output normalized.json
-signalmine extract --input normalized.json --output complaint.json --verbose
-
-signalmine process \
-  --input https://www.reddit.com/r/example/comments/id/title/ \
-  --output -
+signalmine extract --input normalized.json --output complaint.json
 ```
-
-The CLI composes existing application boundaries and adds no FastAPI server,
-frontend, worker, or asynchronous execution. The `process` command does not
-inject persistence; stage storage remains an explicit application choice.
-
-## Evaluation framework
-
-Golden fixtures follow the Phase 0 layout:
-
-```text
-golden/
-  <case-id>/
-    normalized.json
-    gold.json
-```
-
-`raw.json` may replace `normalized.json`; the loader then runs the deterministic
-Reddit normalizer. `gold.json` contains the model-owned extraction fields.
-Host metadata is ignored during comparison. An optional top-level
-`acceptable_values` object can list accepted text alternatives by field.
-
-```python
-from pathlib import Path
-
-from backend.app.evaluation import (
-    EvaluationRunner,
-    GoldenDataset,
-    MarkdownReport,
-)
-from backend.app.extractor import ExtractionEngine, ExtractionSettings
-
-dataset = GoldenDataset.load(Path("golden"))
-result = EvaluationRunner(
-    ExtractionEngine(ExtractionSettings())
-).run(dataset)
-MarkdownReport.write(result, Path("evaluation.md"))
-```
-
-The report includes JSON validity, aggregate precision and recall,
-field-level accuracy, missing values, hallucinated values, per-field metrics,
-and per-case discrepancies. Text matching is case-insensitive with normalized
-whitespace; tool names use set comparison. Provider failures propagate, while
-extraction-validation failures are recorded as invalid outputs. The framework
-produces Markdown only—no dashboard or UI.
 
 ## Development
 
@@ -402,17 +228,8 @@ Python 3.11 or newer is required.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
-```
-
-Run the quality checks:
-
-```bash
-ruff check .
-black --check .
-mypy backend
+pip install -e ".[dev]"
 pytest
-python -m build
 ```
 
 ## Repository layout

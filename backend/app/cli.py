@@ -10,12 +10,14 @@ import typer
 
 from backend.app.collector import (
     FileCollector,
-    RedditCollector,
+    GitHubSettings,
     RedditSettings,
     URLCollector,
     URLCollectorSettings,
+    build_url_collector,
 )
 from backend.app.collector.discussion import coerce_to_discussion
+from backend.app.collector.source_status import format_sources_report, reddit_configured
 from backend.app.config import Settings, configure_logging
 from backend.app.evaluation import (
     BenchmarkConfigError,
@@ -31,10 +33,14 @@ from backend.app.evaluation import (
     load_benchmark_models,
 )
 from backend.app.extractor import ExtractionEngine, ExtractionSettings
-from backend.app.normalizer import RedditNormalizer
+from backend.app.normalizer import DispatchingNormalizer
 from backend.app.observability import NoOpTelemetry, ObservabilitySettings, Telemetry, TelemetryRecorder
 from backend.app.pipeline import PipelineTracer, SourceCollector, SynchronousPipeline
-from backend.app.source_identity import RedditDiscussionIdentityResolver
+from backend.app.source_identity import (
+    CompositeIdentityResolver,
+    GitHubDiscussionIdentityResolver,
+    RedditDiscussionIdentityResolver,
+)
 from backend.app.validator import ComplaintValidator
 
 app = typer.Typer(
@@ -43,8 +49,12 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+UrlArgument = Annotated[
+    str | None,
+    typer.Argument(help="Discussion URL (GitHub issue or Reddit thread)."),
+]
 InputOption = Annotated[
-    str,
+    str | None,
     typer.Option("--input", help="Input URL, JSON file path, or '-' for stdin."),
 ]
 OutputOption = Annotated[
@@ -84,16 +94,24 @@ TraceOutputOption = Annotated[
 
 
 @app.command()
+def sources() -> None:
+    """List available discussion sources and configuration status."""
+
+    typer.echo(format_sources_report())
+
+
+@app.command()
 def fetch(
-    input_value: InputOption,
+    url: UrlArgument = None,
+    input_value: InputOption = None,
     output: OutputOption = "-",
     verbose: VerboseOption = False,
 ) -> None:
     """Fetch one discussion URL and emit a RawDiscussion JSON object."""
 
     _configure_logging(verbose)
-    collector = RedditCollector(_reddit_settings())
-    _write_json(collector.fetch(input_value), output)
+    target = _resolve_target(url, input_value)
+    _write_json(_url_collector().fetch(target), output)
 
 
 @app.command()
@@ -105,9 +123,9 @@ def normalize(
     """Normalize one RawDiscussion JSON object."""
 
     _configure_logging(verbose)
-    raw = _read_json(input_value)
+    raw = _read_json(_require_input(input_value))
     discussion = coerce_to_discussion(raw)
-    _write_json(RedditNormalizer().normalize(discussion), output)
+    _write_json(DispatchingNormalizer().normalize(discussion), output)
 
 
 @app.command()
@@ -119,24 +137,26 @@ def extract(
     """Extract one Complaint from a NormalizedDocument JSON object."""
 
     _configure_logging(verbose)
-    normalized = _read_json(input_value)
+    normalized = _read_json(_require_input(input_value))
     complaint = ExtractionEngine(_extraction_settings()).extract(normalized)
     _write_json(complaint.model_dump(mode="json"), output)
 
 
 @app.command()
 def process(
-    input_value: InputOption,
+    url: UrlArgument = None,
+    input_value: InputOption = None,
     output: OutputOption = "-",
     trace_output: TraceOutputOption = None,
     verbose: VerboseOption = False,
 ) -> None:
-    """Run the synchronous pipeline for one Reddit URL."""
+    """Run the synchronous pipeline for one discussion URL."""
 
     _configure_logging(verbose)
+    target = _resolve_target(url, input_value)
     complaint, tracer = _run_pipeline(
-        collector=RedditCollector(_reddit_settings()),
-        input_value=input_value,
+        collector=_url_collector(),
+        input_value=target,
         verbose=verbose,
     )
     _write_json(complaint.model_dump(mode="json"), output)
@@ -170,16 +190,18 @@ def process_file(
 
 @app.command()
 def trace(
-    input_value: InputOption,
+    url: UrlArgument = None,
+    input_value: InputOption = None,
     output: OutputOption = "-",
     verbose: VerboseOption = False,
 ) -> None:
     """Run the pipeline and emit a structured stage trace."""
 
     _configure_logging(verbose)
+    target = _resolve_target(url, input_value)
     _, tracer = _run_pipeline(
-        collector=RedditCollector(_reddit_settings()),
-        input_value=input_value,
+        collector=_url_collector(),
+        input_value=target,
         verbose=verbose,
     )
     from backend.app.api.trace import to_trace_response
@@ -200,7 +222,7 @@ def process_url(
 
     _configure_logging(verbose)
     collector = URLCollector(URLCollectorSettings())
-    _write_json(collector.fetch(input_value), output)
+    _write_json(collector.fetch(_require_input(input_value)), output)
 
 
 @app.command()
@@ -232,7 +254,7 @@ def create_golden(
     """Create a golden case folder for manual extraction annotation."""
 
     _configure_logging(verbose)
-    raw = _read_json(input_value)
+    raw = _read_json(_require_input(input_value))
     try:
         case_dir = create_golden_case(raw, output)
     except GoldenCreateError as exc:
@@ -270,6 +292,25 @@ def benchmark(
     typer.echo(f"Wrote benchmark report to {output}")
 
 
+def _resolve_target(url: str | None, input_value: str | None) -> str:
+    target = url or input_value
+    if target is None or not target.strip():
+        raise typer.BadParameter(
+            "provide a discussion URL as an argument or --input",
+            param_hint="url",
+        )
+    return target.strip()
+
+
+def _require_input(input_value: str | None) -> str:
+    if input_value is None or not input_value.strip():
+        raise typer.BadParameter(
+            "--input is required",
+            param_hint="--input",
+        )
+    return input_value.strip()
+
+
 def _run_pipeline(
     *,
     collector: SourceCollector,
@@ -284,11 +325,16 @@ def _run_pipeline(
     tracer = PipelineTracer(telemetry)
     pipeline = SynchronousPipeline(
         collector=collector,
-        normalizer=RedditNormalizer(),
+        normalizer=DispatchingNormalizer(),
         extractor=ExtractionEngine(_extraction_settings(), telemetry=telemetry),
         validator=ComplaintValidator(telemetry=telemetry),
         telemetry=tracer,
-        identity_resolver=RedditDiscussionIdentityResolver(),
+        identity_resolver=CompositeIdentityResolver(
+            [
+                GitHubDiscussionIdentityResolver(),
+                RedditDiscussionIdentityResolver(),
+            ]
+        ),
     )
     return pipeline.process_url(input_value).complaint, tracer
 
@@ -306,7 +352,7 @@ def _build_evaluation_pipeline(telemetry: TelemetryRecorder) -> SynchronousPipel
     settings = _extraction_settings()
     return SynchronousPipeline(
         collector=_unused_collector(),
-        normalizer=RedditNormalizer(),
+        normalizer=DispatchingNormalizer(),
         extractor=ExtractionEngine(settings, telemetry=telemetry),
         validator=ComplaintValidator(),
         telemetry=telemetry,
@@ -326,8 +372,21 @@ def _configure_logging(verbose: bool) -> None:
     configure_logging(Settings(log_level=level))
 
 
+def _url_collector() -> SourceCollector:
+    reddit_settings = _reddit_settings() if reddit_configured() else None
+    return build_url_collector(
+        github_settings=_github_settings(),
+        reddit_settings=reddit_settings,
+    )
+
+
 def _reddit_settings() -> RedditSettings:
     factory = cast(Callable[[], RedditSettings], RedditSettings)
+    return factory()
+
+
+def _github_settings() -> GitHubSettings:
+    factory = cast(Callable[[], GitHubSettings], GitHubSettings)
     return factory()
 
 

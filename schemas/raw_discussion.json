@@ -26,8 +26,8 @@
     },
     "source": {
       "type": "string",
-      "minLength": 1,
-      "description": "Source platform identifier (reddit, github, hackernews, ...)."
+      "enum": ["reddit", "github", "hackernews", "file"],
+      "description": "Source platform identifier."
     },
     "discussion_id": {
       "type": "string",

@@ -33,25 +33,20 @@ def capture_logging(monkeypatch: Any) -> list[str]:
 def test_fetch_executes_collector_and_writes_json_stdout(monkeypatch: Any) -> None:
     levels = capture_logging(monkeypatch)
     calls: list[str] = []
-    payload = {"stage": "raw", "source": "reddit"}
+    payload = {"stage": "raw", "source": "github"}
 
     class FakeCollector:
-        def __init__(self, _settings: object) -> None:
-            pass
-
         def fetch(self, url: str) -> dict[str, Any]:
             calls.append(url)
             return payload
 
-    monkeypatch.setattr(cli, "RedditSettings", lambda: object())
-    monkeypatch.setattr(cli, "RedditCollector", FakeCollector)
+    monkeypatch.setattr(cli, "_url_collector", lambda: FakeCollector())
 
     result = runner.invoke(
         cli.app,
         [
             "fetch",
-            "--input",
-            "https://reddit.test/post",
+            "https://github.com/acme/platform/issues/42",
             "--output",
             "-",
             "--verbose",
@@ -60,8 +55,38 @@ def test_fetch_executes_collector_and_writes_json_stdout(monkeypatch: Any) -> No
 
     assert result.exit_code == 0
     assert json.loads(result.stdout) == payload
-    assert calls == ["https://reddit.test/post"]
+    assert calls == ["https://github.com/acme/platform/issues/42"]
     assert levels == ["DEBUG"]
+
+
+def test_fetch_accepts_input_option(monkeypatch: Any) -> None:
+    calls: list[str] = []
+
+    class FakeCollector:
+        def fetch(self, url: str) -> dict[str, Any]:
+            calls.append(url)
+            return {"source": "github"}
+
+    monkeypatch.setattr(cli, "_url_collector", lambda: FakeCollector())
+
+    result = runner.invoke(
+        cli.app,
+        ["fetch", "--input", "https://github.com/acme/platform/issues/42"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == ["https://github.com/acme/platform/issues/42"]
+
+
+def test_sources_lists_available_collectors() -> None:
+    result = runner.invoke(cli.app, ["sources"])
+
+    assert result.exit_code == 0
+    assert "Available Sources" in result.stdout
+    assert "GitHub" in result.stdout
+    assert "File" in result.stdout
+    assert "Reddit" in result.stdout
+    assert "Hacker News" in result.stdout
 
 
 def test_normalize_reads_json_file_and_writes_json_file(
@@ -82,7 +107,7 @@ def test_normalize_reads_json_file_and_writes_json_file(
             inputs.append(payload)
             return normalized
 
-    monkeypatch.setattr(cli, "RedditNormalizer", FakeNormalizer)
+    monkeypatch.setattr(cli, "DispatchingNormalizer", FakeNormalizer)
     monkeypatch.setattr(cli, "coerce_to_discussion", lambda payload: coerced)
 
     result = runner.invoke(
@@ -158,8 +183,7 @@ def test_process_executes_synchronous_pipeline_and_emits_json(
         return FakeComplaint(complaint), cli.PipelineTracer()
 
     monkeypatch.setattr(cli, "_run_pipeline", fake_run_pipeline)
-    monkeypatch.setattr(cli, "_reddit_settings", lambda: object())
-    monkeypatch.setattr(cli, "RedditCollector", lambda _settings: object())
+    monkeypatch.setattr(cli, "_url_collector", lambda: object())
 
     result = runner.invoke(
         cli.app,
@@ -251,8 +275,7 @@ def test_process_writes_trace_output_when_requested(
         return FakeComplaint(complaint), FakeTracer()
 
     monkeypatch.setattr(cli, "_run_pipeline", fake_run_pipeline)
-    monkeypatch.setattr(cli, "_reddit_settings", lambda: object())
-    monkeypatch.setattr(cli, "RedditCollector", lambda _settings: object())
+    monkeypatch.setattr(cli, "_url_collector", lambda: object())
 
     result = runner.invoke(
         cli.app,
@@ -306,8 +329,7 @@ def test_trace_command_writes_pipeline_trace_json(
         "_run_pipeline",
         lambda **_: (FakeComplaint({"ignored": True}), FakeTracer()),
     )
-    monkeypatch.setattr(cli, "_reddit_settings", lambda: object())
-    monkeypatch.setattr(cli, "RedditCollector", lambda _settings: object())
+    monkeypatch.setattr(cli, "_url_collector", lambda: object())
 
     result = runner.invoke(
         cli.app,

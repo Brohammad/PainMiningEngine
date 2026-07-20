@@ -13,7 +13,8 @@ from backend.app.api.services import (
     ProcessingHistoryService,
     ProcessingService,
 )
-from backend.app.collector import RedditCollector, RedditSettings
+from backend.app.collector import GitHubSettings, RedditSettings, build_url_collector
+from backend.app.collector.source_status import reddit_configured
 from backend.app.config import (
     DatabaseSettings,
     Settings,
@@ -22,10 +23,14 @@ from backend.app.config import (
     create_session_factory,
 )
 from backend.app.extractor import ExtractionEngine, ExtractionSettings
-from backend.app.normalizer import RedditNormalizer
+from backend.app.normalizer import DispatchingNormalizer
 from backend.app.observability import ObservabilitySettings, Telemetry
 from backend.app.pipeline import PipelineTracer, SynchronousPipeline
-from backend.app.source_identity import RedditDiscussionIdentityResolver
+from backend.app.source_identity import (
+    CompositeIdentityResolver,
+    GitHubDiscussionIdentityResolver,
+    RedditDiscussionIdentityResolver,
+)
 from backend.app.storage import SQLAlchemyStageStore
 from backend.app.validator import ComplaintValidator
 
@@ -54,12 +59,16 @@ def build_container() -> ApiContainer:
     engine = create_database_engine(database_settings)
     telemetry.instrument_engine(engine)
     store = SQLAlchemyStageStore(create_session_factory(engine))
+    reddit_settings = (
+        _environment_settings(RedditSettings) if reddit_configured() else None
+    )
     pipeline = SynchronousPipeline(
-        collector=RedditCollector(
-            _environment_settings(RedditSettings),
+        collector=build_url_collector(
+            reddit_settings=reddit_settings,
+            github_settings=_environment_settings(GitHubSettings),
             telemetry=telemetry,
         ),
-        normalizer=RedditNormalizer(),
+        normalizer=DispatchingNormalizer(),
         extractor=ExtractionEngine(
             _environment_settings(ExtractionSettings),
             telemetry=telemetry,
@@ -67,7 +76,12 @@ def build_container() -> ApiContainer:
         validator=ComplaintValidator(telemetry=telemetry),
         storage=store,
         telemetry=tracer,
-        identity_resolver=RedditDiscussionIdentityResolver(),
+        identity_resolver=CompositeIdentityResolver(
+            [
+                GitHubDiscussionIdentityResolver(),
+                RedditDiscussionIdentityResolver(),
+            ]
+        ),
     )
     return ApiContainer(
         processing=ProcessingService(pipeline, store, tracer),
