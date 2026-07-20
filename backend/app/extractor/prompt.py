@@ -78,6 +78,7 @@ class ExtractionPrompt:
         return self._substitute(
             self.user_template,
             {
+                "platform": str(normalized["platform"]),
                 "title": str(normalized["title"]),
                 "content": str(normalized["content"]),
                 "comments_block": "\n\n".join(comment_blocks),

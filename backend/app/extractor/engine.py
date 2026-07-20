@@ -19,7 +19,11 @@ from pydantic import ValidationError as PydanticValidationError
 from backend.app.extractor.models import (
     Complaint,
     ComplaintCandidate,
+    EvidenceSource,
     ExtractionMeta,
+    Provenance,
+    TextField,
+    TriStateField,
 )
 from backend.app.extractor.prompt import ExtractionPrompt
 from backend.app.extractor.prompt_registry import PromptRegistry
@@ -124,6 +128,10 @@ class ExtractionEngine:
                     if usage is not None:
                         self._usage_records.append(usage)
                 candidate = ComplaintCandidate.model_validate(raw_candidate)
+                candidate = self._align_evidence_sources(
+                    candidate,
+                    str(normalized["platform"]),
+                )
                 complaint = self._complete_complaint(candidate, normalized)
                 validated = self._complaint_validator.validate(
                     complaint,
@@ -162,6 +170,58 @@ class ExtractionEngine:
         if isinstance(error, PydanticValidationError):
             return "pydantic_response"
         return "complaint_validation"
+
+    @staticmethod
+    def _align_evidence_sources(
+        candidate: ComplaintCandidate,
+        platform: str,
+    ) -> ComplaintCandidate:
+        source = EvidenceSource(platform)
+
+        def align_provenance(provenance: Provenance) -> Provenance:
+            if provenance.source is source:
+                return provenance
+            return provenance.model_copy(update={"source": source})
+
+        def align_text_field(field: TextField) -> TextField:
+            return field.model_copy(
+                update={
+                    "evidence": [
+                        align_provenance(item) for item in field.evidence
+                    ]
+                }
+            )
+
+        def align_tri_state(field: TriStateField) -> TriStateField:
+            return field.model_copy(
+                update={
+                    "evidence": [
+                        align_provenance(item) for item in field.evidence
+                    ]
+                }
+            )
+
+        return candidate.model_copy(
+            update={
+                "pain_summary": align_text_field(candidate.pain_summary),
+                "workflow": align_text_field(candidate.workflow),
+                "workaround": align_text_field(candidate.workaround),
+                "buyer": align_text_field(candidate.buyer),
+                "budget_owner": align_tri_state(candidate.budget_owner),
+                "time_cost": align_text_field(candidate.time_cost),
+                "industry": align_text_field(candidate.industry),
+                "existing_tools": [
+                    tool.model_copy(
+                        update={
+                            "evidence": [
+                                align_provenance(item) for item in tool.evidence
+                            ]
+                        }
+                    )
+                    for tool in candidate.existing_tools
+                ],
+            }
+        )
 
     def _complete_complaint(
         self,

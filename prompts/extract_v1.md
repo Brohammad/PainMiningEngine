@@ -17,7 +17,7 @@ Rules:
 3. Never invent tools, buyers, budgets, industries, or time costs.
 4. Every non-null text `value` and every tool `name` must include at least one provenance object in `evidence`.
 5. Each provenance object must point at the supporting span:
-   - `source`: platform (V1: `reddit`)
+   - `source`: must match `PLATFORM` below (`reddit`, `github`, or `hackernews`)
    - `field`: `title` | `body` | `comment`
    - `comment_id`: comment id when `field` is `comment`, otherwise `null`
    - `character_range`: half-open `[start, end)` Unicode offsets into **that field’s text only**
@@ -38,7 +38,7 @@ Rules:
 | `buyer` | Role/persona who would buy a fix, only if implied | Guess “VP Eng” with no signal |
 | `budget_owner` | Whether speaker controls budget | Assume false when unclear |
 | `time_cost` | Time/effort cost if stated or clearly implied | Fabricate hours/week |
-| `industry` | Industry/domain if stated | Infer from subreddit alone unless text supports it |
+| `industry` | Industry/domain if stated | Infer from community name alone unless text supports it |
 | `existing_tools` | Named tools/products mentioned in context of the pain | Generic words like “scripts” unless used as a tool name |
 
 ---
@@ -80,8 +80,11 @@ Extract pain intelligence from the following discussion.
 Return JSON matching the SignalMine extraction schema.
 Leave unsupported fields null (budget_owner: unknown) with empty evidence.
 Character ranges are Unicode offsets into the TITLE, BODY, or individual COMMENT body as labeled below.
+Set every provenance `source` to the PLATFORM value below.
 
 ---
+PLATFORM: {{platform}}
+
 TITLE:
 {{title}}
 
