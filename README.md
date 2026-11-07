@@ -3,6 +3,19 @@
 SignalMine turns unstructured internet discussions into structured,
 evidence-backed market intelligence.
 
+**Portfolio:** [Case study](https://brohammad.tech/projects/signalmine) · [Metrics](docs/project-metrics.md) (125 pytest tests collected) · [Author](https://brohammad.tech)
+
+## Documentation map
+
+| Topic | Link |
+|--------|------|
+| Architecture | [`docs/architecture.md`](docs/architecture.md) |
+| Data model | [`docs/data-model.md`](docs/data-model.md) |
+| Evaluation | [`docs/eval.md`](docs/eval.md) |
+| Product scope | [`docs/product.md`](docs/product.md) |
+| Decisions | [`docs/decisions.md`](docs/decisions.md) |
+| JSON contracts | [`schemas/`](schemas/) |
+
 The product definition and constraints are authoritative in
 [`docs/`](docs/). The canonical data contracts are the JSON Schemas in
 [`schemas/`](schemas/).
